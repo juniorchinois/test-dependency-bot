@@ -1,0 +1,53 @@
+{
+  "name": "dependency-vulnerability-bot",
+  "version": "1.0.0",
+  "description": "Simple GitHub bot to check for vulnerable dependencies",
+  "main": "src/index.js",
+
+  "scripts": {
+    "start": "probot run ./src/index.js",
+    "dev": "probot run ./src/index.js --local",
+    "test": "jest --coverage --setupFilesAfterEnv ./tests/setup.js",
+    "test:watch": "jest --watch --setupFilesAfterEnv ./tests/setup.js",
+    "test:unit": "jest tests/unit --setupFilesAfterEnv ./tests/setup.js",
+    "test:integration": "jest tests/integration --setupFilesAfterEnv ./tests/setup.js",
+    "clear-cache": "node scripts/clear-cache.js",
+    "setup": "node scripts/setup.js",
+    "lint": "eslint src/**/*.js tests/**/*.js",
+    "format": "prettier --write src/**/*.js tests/**/*.js"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "collectCoverageFrom": [
+      "src/**/*.js",
+      "!src/index.js",
+      "!**/node_modules/**"
+    ],
+    "coverageThreshold": {
+      "global": {
+        "branches": 70,
+        "functions": 80,
+        "lines": 80,
+        "statements": 80
+      }
+    }
+  },
+
+  "dependencies": {
+    "probot": "^12.3.0",
+    "axios": "^1.6.0",
+    "semver": "^7.5.4",
+    "dotenv": "^16.3.1",
+    "winston": "^3.11.0"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "nock": "^13.3.8",
+    "eslint": "^8.53.0",
+    "prettier": "^3.0.3",
+    "supertest": "^6.3.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
