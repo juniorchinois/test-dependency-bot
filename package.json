@@ -1,9 +1,11 @@
 {
-  "name": "dependency-vulnerability-bot",
+  "name": "@juniorchinois/depscan",
   "version": "1.0.0",
-  "description": "Simple GitHub bot to check for vulnerable dependencies",
+  "description": "GitHub bot to check for vulnerable dependencies",
   "main": "src/index.js",
-
+  "bin": {
+    "depscan": "./src/cli.js"
+  },
   "scripts": {
     "start": "probot run ./src/index.js",
     "dev": "probot run ./src/index.js --local",
@@ -32,7 +34,6 @@
       }
     }
   },
-
   "dependencies": {
     "probot": "^12.3.0",
     "axios": "^1.6.0",
