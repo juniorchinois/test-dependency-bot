@@ -1,6 +1,6 @@
 {
   "name": "@juniorchinois/depscan",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "GitHub bot to check for vulnerable dependencies",
   "main": "src/index.js",
   "bin": {
