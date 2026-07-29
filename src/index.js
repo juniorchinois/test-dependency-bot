@@ -2,8 +2,8 @@
 const { Probot } = require('probot');
 const botApp = require('./app');
 
-// Export as library
-module.exports = {
+// Export as library (for programmatic use)
+const libraryExports = {
   botApp,
   scanNPM: require('./scanners/npm-scanner').scanNPM,
   scanPip: require('./scanners/pip-scanner').scanPip,
@@ -24,6 +24,15 @@ module.exports = {
     return probot.start();
   }
 };
+
+// Export the bot function for Probot CLI (THIS IS THE KEY FIX)
+module.exports = (app) => {
+  // Load your actual bot app
+  botApp(app);
+};
+
+// Also attach library exports to the function
+Object.assign(module.exports, libraryExports);
 
 // If run directly (node src/index.js), start bot
 if (require.main === module) {
