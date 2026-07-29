@@ -125,19 +125,23 @@ class PipScanner {
   async checkOSV(name, version) {
     try {
       const requestBody = {
-        package: {
-          name: name,
-          ecosystem: 'PyPI'
-        }
+        queries: [{
+          package: {
+            name: name,
+            ecosystem: 'PyPI'
+          }
+        }]
       };
 
       if (version) {
-        requestBody.version = version;
+        requestBody.queries[0].version = version;
       }
 
       const response = await this.apiClient.post(config.osvApiUrl, requestBody);
-
-      const vulns = response.data.vulns || [];
+      
+      const results = response.data.results || [];
+      const vulns = results.length > 0 ? results[0].vulns || [] : [];
+      
       const formattedVulns = vulns.map(v => ({
         id: v.id || v.cve,
         severity: this.mapSeverity(v.severity),
@@ -165,21 +169,45 @@ class PipScanner {
   }
 
   mapSeverity(severity) {
-    const severityMap = {
-      'critical': 'CRITICAL',
-      'high': 'HIGH',
-      'medium': 'MEDIUM',
-      'low': 'LOW',
-      'moderate': 'MEDIUM'
-    };
-    return severityMap[severity?.toLowerCase()] || 'UNKNOWN';
+  if (!severity) return 'UNKNOWN';
+  
+  let severityStr = '';
+  
+  if (typeof severity === 'string') {
+    severityStr = severity;
+  } else if (typeof severity === 'object' && severity !== null) {
+    // Handle OSV severity object: { type: "CVSS_V3", score: "..." }
+    severityStr = severity.type || severity.severity || JSON.stringify(severity);
+  } else {
+    return 'UNKNOWN';
   }
+  
+  const severityMap = {
+    'critical': 'CRITICAL',
+    'high': 'HIGH',
+    'medium': 'MEDIUM',
+    'moderate': 'MEDIUM',
+    'low': 'LOW',
+    'info': 'LOW',
+    'cvss_v3': 'MEDIUM',
+    'cvss_v4': 'MEDIUM'
+  };
+  
+  const key = severityStr.toString().toLowerCase();
+  return severityMap[key] || 'UNKNOWN';
+}
 
   extractFixedVersion(vuln) {
-    const ranges = vuln?.affected?.[0]?.ranges || [];
-    for (const range of ranges) {
-      if (range.fixed && range.fixed.length > 0) {
-        return range.fixed[0];
+    const affected = vuln?.affected || [];
+    for (const item of affected) {
+      const ranges = item?.ranges || [];
+      for (const range of ranges) {
+        const events = range?.events || [];
+        for (const event of events) {
+          if (event.fixed) {
+            return event.fixed;
+          }
+        }
       }
     }
     return null;

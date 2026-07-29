@@ -21,10 +21,12 @@ describe('Bot Integration Tests', () => {
     
     // Create a new probot instance
     probot = createProbot({
-      id: 123,
-      privateKey: 'test-private-key',
-      secret: 'test-secret'
-    });
+  id: 123,
+  privateKey: `-----BEGIN RSA PRIVATE KEY-----
+test-key
+-----END RSA PRIVATE KEY-----`,
+  secret: 'test-secret'
+});
 
     // Load the bot app
     probot.load(botApp);

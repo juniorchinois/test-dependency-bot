@@ -4,12 +4,25 @@
   "description": "GitHub bot to check for vulnerable dependencies",
   "main": "src/index.js",
   "bin": {
-    "depscan": "./src/cli.js"
+    "depscan": "./bin/depscan.js"
   },
+  "exports": {
+    ".": "./src/index.js",
+    "./scanners": "./src/scanners/index.js",
+    "./config": "./src/config.js"
+  },
+  "files": [
+    "src/",
+    "bin/",
+    "data/",
+    "README.md"
+  ],
   "scripts": {
     "start": "probot run ./src/index.js",
     "dev": "probot run ./src/index.js --local",
     "test": "jest --coverage --setupFilesAfterEnv ./tests/setup.js",
+    "build": "node scripts/build.js",
+    "prepublishOnly": "npm test && npm run build",
     "test:watch": "jest --watch --setupFilesAfterEnv ./tests/setup.js",
     "test:unit": "jest tests/unit --setupFilesAfterEnv ./tests/setup.js",
     "test:integration": "jest tests/integration --setupFilesAfterEnv ./tests/setup.js",
@@ -35,16 +48,17 @@
     }
   },
   "dependencies": {
-    "probot": "^12.3.0",
     "axios": "^1.6.0",
-    "semver": "^7.5.4",
+    "commander": "^15.0.0",
     "dotenv": "^16.3.1",
+    "probot": "^12.3.0",
+    "semver": "^7.5.4",
     "winston": "^3.11.0"
   },
   "devDependencies": {
+    "eslint": "^8.53.0",
     "jest": "^29.7.0",
     "nock": "^13.3.8",
-    "eslint": "^8.53.0",
     "prettier": "^3.0.3",
     "supertest": "^6.3.3"
   },

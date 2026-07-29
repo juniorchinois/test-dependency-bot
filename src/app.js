@@ -54,10 +54,12 @@ function botApp(app) {
           manifestFiles.push({ path: file.filename, type: 'pip' });
         }
         if (file.filename === 'yarn.lock' && config.ecosystems.yarn) {
-          manifestFiles.push({ path: file.filename, type: 'yarn' });
+          logger.warn(`⚠️ yarn.lock scanning not yet implemented, skipping`);
+          continue;
         }
         if (file.filename === 'poetry.lock' && config.ecosystems.poetry) {
-          manifestFiles.push({ path: file.filename, type: 'poetry' });
+          logger.warn(`⚠️ poetry.lock scanning not yet implemented, skipping`);
+         continue;
         }
       }
 

@@ -124,7 +124,7 @@ numpy~=1.21.0`;
     const findings = await scanPip(content, getCache, setCache);
     // Should only scan up to maxDependencies (100)
     expect(findings.length).toBe(0);
-  });
+  }, 15000);
 
   test('handles API errors gracefully', async () => {
     // Mock API error

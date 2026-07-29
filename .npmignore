@@ -1,0 +1,11 @@
+tests/
+coverage/
+logs/
+data/cache.json
+.env
+node_modules/
+.github/
+Dockerfile
+docker-compose.yml
+*.pem
+*.key

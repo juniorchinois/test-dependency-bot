@@ -19,4 +19,5 @@ jobs:
           node-version: '18.x'
           registry-url: 'https://registry.npmjs.org'
       - run: npm ci
-      - run: npm stage publish --provenance --access public
+      # - run: npm stage publish --provenance --access public
+      - run: npm publish --provenance --access public

@@ -14,10 +14,10 @@ module.exports = {
   ignoredPackages: process.env.IGNORED_PACKAGES?.split(',').map(p => p.trim()) || [],
   
   // API timeout in milliseconds
-  apiTimeout: parseInt(process.env.API_TIMEOUT) || 5000,
+  apiTimeout: parseInt(process.env.API_TIMEOUT) || 15000,
   
   // Skip forks
-  skipForks: process.env.SKIP_FORKS === 'true' || true,
+ skipForks: process.env.SKIP_FORKS !== 'false',
   
   // Always create new comment instead of updating
   alwaysCreateNewComment: process.env.ALWAYS_CREATE_NEW_COMMENT === 'true',
@@ -26,7 +26,7 @@ module.exports = {
   removeOldComments: process.env.REMOVE_OLD_COMMENTS === 'true',
   
   // OSV API URL
-  osvApiUrl: process.env.OSV_API_URL || 'https://api.osv.dev/v1/query',
+  osvApiUrl: process.env.OSV_API_URL || 'https://api.osv.dev/v1/querybatch',
   
   // NPM registry URL
   npmRegistryUrl: process.env.NPM_REGISTRY_URL || 'https://registry.npmjs.org',
