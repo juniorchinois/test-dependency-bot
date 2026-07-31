@@ -108,18 +108,16 @@ class NPMScanner {
 
   async checkOSV(name, version) {
     try {
+     
       const response = await this.apiClient.post(config.osvApiUrl, {
-        queries: [{
-          package: {
-            name: name,
-            ecosystem: 'npm'
-          },
-          version: version
-        }]
+        package: {
+          name: name,
+          ecosystem: 'npm'
+        },
+        version: version
       });
 
-      const results = response.data.results || [];
-      const vulns = results.length > 0 ? results[0].vulns || [] : [];
+      const vulns = response.data.vulns || [];
 
       const formattedVulns = vulns.map(v => ({
         id: v.id || v.cve,

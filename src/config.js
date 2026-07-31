@@ -26,7 +26,7 @@ module.exports = {
   removeOldComments: process.env.REMOVE_OLD_COMMENTS === 'true',
   
   // OSV API URL
-  osvApiUrl: process.env.OSV_API_URL || 'https://api.osv.dev/v1/querybatch',
+  osvApiUrl: process.env.OSV_API_URL || 'https://api.osv.dev/v1/query',
   
   // NPM registry URL
   npmRegistryUrl: process.env.NPM_REGISTRY_URL || 'https://registry.npmjs.org',

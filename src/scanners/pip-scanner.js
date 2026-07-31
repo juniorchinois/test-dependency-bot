@@ -14,11 +14,11 @@ class PipScanner {
 
   async scan(requirementsContent, getCache, setCache) {
     const findings = [];
-    
+
     try {
       // Parse requirements.txt
       const dependencies = this.parseRequirements(requirementsContent);
-      
+
       if (dependencies.length === 0) {
         logger.info('📦 No dependencies found in requirements.txt');
         return [];
@@ -94,7 +94,7 @@ class PipScanner {
 
   async checkVulnerability(name, version, getCache, setCache) {
     const cacheKey = `pip:${name}:${version || 'latest'}`;
-    
+
     // Check cache
     const cached = getCache(cacheKey);
     if (cached && cached.timestamp > Date.now() - config.cacheTTL) {
@@ -105,7 +105,7 @@ class PipScanner {
     try {
       // Check OSV API for Python packages
       const result = await this.checkOSV(name, version);
-      
+
       const cacheResult = {
         vulnerabilities: result?.vulnerabilities || [],
         fixedVersion: result?.fixedVersion || null,
@@ -124,24 +124,22 @@ class PipScanner {
 
   async checkOSV(name, version) {
     try {
+      
       const requestBody = {
-        queries: [{
-          package: {
-            name: name,
-            ecosystem: 'PyPI'
-          }
-        }]
+        package: {
+          name: name,
+          ecosystem: 'PyPI'
+        }
       };
 
       if (version) {
-        requestBody.queries[0].version = version;
+        requestBody.version = version;
       }
 
       const response = await this.apiClient.post(config.osvApiUrl, requestBody);
-      
-      const results = response.data.results || [];
-      const vulns = results.length > 0 ? results[0].vulns || [] : [];
-      
+
+      const vulns = response.data.vulns || [];
+
       const formattedVulns = vulns.map(v => ({
         id: v.id || v.cve,
         severity: this.mapSeverity(v.severity),
@@ -169,33 +167,33 @@ class PipScanner {
   }
 
   mapSeverity(severity) {
-  if (!severity) return 'UNKNOWN';
-  
-  let severityStr = '';
-  
-  if (typeof severity === 'string') {
-    severityStr = severity;
-  } else if (typeof severity === 'object' && severity !== null) {
-    // Handle OSV severity object: { type: "CVSS_V3", score: "..." }
-    severityStr = severity.type || severity.severity || JSON.stringify(severity);
-  } else {
-    return 'UNKNOWN';
+    if (!severity) return 'UNKNOWN';
+
+    let severityStr = '';
+
+    if (typeof severity === 'string') {
+      severityStr = severity;
+    } else if (typeof severity === 'object' && severity !== null) {
+      // Handle OSV severity object: { type: "CVSS_V3", score: "..." }
+      severityStr = severity.type || severity.severity || JSON.stringify(severity);
+    } else {
+      return 'UNKNOWN';
+    }
+
+    const severityMap = {
+      'critical': 'CRITICAL',
+      'high': 'HIGH',
+      'medium': 'MEDIUM',
+      'moderate': 'MEDIUM',
+      'low': 'LOW',
+      'info': 'LOW',
+      'cvss_v3': 'MEDIUM',
+      'cvss_v4': 'MEDIUM'
+    };
+
+    const key = severityStr.toString().toLowerCase();
+    return severityMap[key] || 'UNKNOWN';
   }
-  
-  const severityMap = {
-    'critical': 'CRITICAL',
-    'high': 'HIGH',
-    'medium': 'MEDIUM',
-    'moderate': 'MEDIUM',
-    'low': 'LOW',
-    'info': 'LOW',
-    'cvss_v3': 'MEDIUM',
-    'cvss_v4': 'MEDIUM'
-  };
-  
-  const key = severityStr.toString().toLowerCase();
-  return severityMap[key] || 'UNKNOWN';
-}
 
   extractFixedVersion(vuln) {
     const affected = vuln?.affected || [];
@@ -217,14 +215,14 @@ class PipScanner {
     const fixedVersions = vulns
       .map(v => this.extractFixedVersion(v))
       .filter(v => v !== null);
-    
+
     if (fixedVersions.length === 0) return null;
-    
+
     // Sort versions (simplified for Python versions)
     const sorted = fixedVersions.sort((a, b) => {
       const partsA = a.split('.').map(Number);
       const partsB = b.split('.').map(Number);
-      
+
       for (let i = 0; i < Math.max(partsA.length, partsB.length); i++) {
         const numA = partsA[i] || 0;
         const numB = partsB[i] || 0;
@@ -232,7 +230,7 @@ class PipScanner {
       }
       return 0;
     });
-    
+
     return sorted[0];
   }
 

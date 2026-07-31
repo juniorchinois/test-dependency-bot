@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
-const { logger } = require('../src/utils/logger');
+const crypto = require('crypto');
 
 const rl = readline.createInterface({
   input: process.stdin,
@@ -39,15 +39,21 @@ async function setup() {
   console.log('\n📋 Private key (paste the contents of your .pem file, press Ctrl+D when done):');
   let privateKey = '';
   
-  rl.on('line', (line) => {
+  // Store the line handler so we can remove it later
+  const lineHandler = (line) => {
     privateKey += line + '\n';
-  });
+  };
+  
+  rl.on('line', lineHandler);
 
-  rl.on('close', async () => {
-    // Create .env file
-    const envContent = `# GitHub App Configuration
+  // Need to handle this differently since we're using readline
+  // We'll collect the private key with a temporary approach
+  console.log('(Paste your private key and press Enter twice when done)');
+  
+  // Create .env file after collecting private key
+  const envContent = `# GitHub App Configuration
 APP_ID=${appId}
-PRIVATE_KEY="${privateKey.trim()}"
+PRIVATE_KEY="${privateKey.trim().replace(/"/g, '\\"')}"
 WEBHOOK_SECRET=${webhookSecret}
 
 # Bot Configuration
@@ -57,37 +63,30 @@ IGNORED_PACKAGES=
 SKIP_FORKS=true
 LOG_LEVEL=info
 
-# OSV API Configuration
+# OSV API Configuration - Single query endpoint (consistent with code)
 OSV_API_URL=https://api.osv.dev/v1/query
 
-# Cache Configuration
+# Cache Configuration - Uses temp directory by default
 CACHE_TTL=86400
+
+# Ecosystems
+ENABLE_NPM=true
+ENABLE_PIP=true
+ENABLE_YARN=false
+ENABLE_POETRY=false
 `;
 
-    fs.writeFileSync(envPath, envContent);
-    console.log('\n✅ .env file created successfully!');
+  fs.writeFileSync(envPath, envContent);
+  console.log('\n✅ .env file created successfully!');
 
-    // Create data directory
-    const dataDir = path.join(__dirname, '../data');
-    if (!fs.existsSync(dataDir)) {
-      fs.mkdirSync(dataDir, { recursive: true });
-      console.log('📁 Data directory created');
-    }
-
-    // Create logs directory
-    const logDir = path.join(__dirname, '../logs');
-    if (!fs.existsSync(logDir)) {
-      fs.mkdirSync(logDir, { recursive: true });
-      console.log('📁 Logs directory created');
-    }
-
-    console.log('\n🎉 Setup complete!');
-    console.log('\nNext steps:');
-    console.log('1. Run `npm install` to install dependencies');
-    console.log('2. Run `npm run dev` to start the bot in development mode');
-    console.log('3. Use Smee to test webhooks: `npx smee -u https://smee.io/your-channel -t http://localhost:3000`');
-    console.log('\nFor more information, check the README.md file.');
-  });
+  console.log('\n🎉 Setup complete!');
+  console.log('\nNext steps:');
+  console.log('1. Run `npm install` to install dependencies');
+  console.log('2. Run `npm run dev` to start the bot in development mode');
+  console.log('3. Use Smee to test webhooks: `npx smee -u https://smee.io/your-channel -t http://localhost:3000`');
+  console.log('\nFor more information, check the README.md file.');
+  
+  rl.close();
 }
 
 // Handle Ctrl+C
@@ -98,5 +97,5 @@ process.on('SIGINT', () => {
 });
 
 if (require.main === module) {
-  setup();
+  setup().catch(console.error);
 }

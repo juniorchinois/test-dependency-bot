@@ -3,11 +3,14 @@ const { logger } = require('./utils/logger');
 const config = require('./config');
 const { scanNPM } = require('./scanners/npm-scanner');
 const { scanPip } = require('./scanners/pip-scanner');
-const { getCached, setCached } = require('./utils/cache');
+const { getCached, setCached, initialize: initCache, shutdown: shutdownCache } = require('./utils/cache');
 const { formatComment, formatErrorComment } = require('./utils/github');
 
 // Bot application
 function botApp(app) {
+  // Initialize cache when bot starts (not on require)
+  initCache();
+  
   logger.info('🤖 Dependency Vulnerability Bot starting...');
 
   // Event handlers
@@ -20,6 +23,12 @@ function botApp(app) {
 
   // Handle push events to scan main branch
   app.on('push', handlePush);
+  
+  // Shutdown handler
+  app.on('shutdown', () => {
+    logger.info('🛑 Shutting down...');
+    shutdownCache();
+  });
 
   async function handlePullRequest(context) {
     const { pull_request, repository } = context.payload;
@@ -59,7 +68,7 @@ function botApp(app) {
         }
         if (file.filename === 'poetry.lock' && config.ecosystems.poetry) {
           logger.warn(`⚠️ poetry.lock scanning not yet implemented, skipping`);
-         continue;
+          continue;
         }
       }
 
