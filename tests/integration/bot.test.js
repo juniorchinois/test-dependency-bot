@@ -23,7 +23,9 @@ describe('Bot Integration Tests', () => {
     probot = createProbot({
   id: 123,
   privateKey: `-----BEGIN RSA PRIVATE KEY-----
-test-key
+MIIEpAIBAAKCAQEAxTlXmx8x5n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x
+8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x
+...
 -----END RSA PRIVATE KEY-----`,
   secret: 'test-secret'
 });

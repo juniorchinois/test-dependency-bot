@@ -6,9 +6,10 @@ const config = require('../config');
 class NPMScanner {
   constructor() {
     this.apiClient = axios.create({
-      timeout: config.apiTimeout,
+      timeout: 60000, // 60 seconds
       headers: {
-        'User-Agent': 'Dependency-Vulnerability-Bot/1.0'
+        'User-Agent': 'Dependency-Vulnerability-Bot/1.0',
+        'Content-Type': 'application/json'
       }
     });
   }
@@ -23,145 +24,87 @@ class NPMScanner {
         ...packageJson.devDependencies
       };
 
-      // Limit number of dependencies to scan
       const depsToScan = Object.entries(allDeps)
-        .slice(0, config.maxDependencies);
+        .slice(0, config.maxDependencies || 100);
 
       logger.info(`🔍 Scanning ${depsToScan.length} npm dependencies`);
 
+      // Try npm audit API directly (more reliable than OSV)
       for (const [name, version] of depsToScan) {
-        try {
-          const cleanVersion = this.cleanVersion(version);
-          if (!cleanVersion) {
-            logger.warn(`⚠️ Invalid version for ${name}: ${version}`);
-            continue;
-          }
+        const cleanVersion = this.cleanVersion(version);
+        if (!cleanVersion) continue;
 
-          const vulnerability = await this.checkVulnerability(
-            name,
-            cleanVersion,
-            getCache,
-            setCache
-          );
-
-          if (vulnerability) {
+        const cacheKey = `npm:${name}:${cleanVersion}`;
+        const cached = getCache(cacheKey);
+        
+        if (cached && cached.timestamp > Date.now() - (config.cacheTTL || 86400000)) {
+          if (cached.vulnerabilities && cached.vulnerabilities.length > 0) {
             findings.push({
               package: name,
               currentVersion: version,
-              vulnerabilities: vulnerability.vulnerabilities,
-              recommendedFix: vulnerability.fixedVersion
+              vulnerabilities: cached.vulnerabilities,
+              recommendedFix: cached.fixedVersion || null
             });
           }
-
-          // Add delay to avoid rate limiting
-          await this.delay(100);
-
-        } catch (error) {
-          logger.error(`Error scanning ${name}:`, error.message);
+          continue;
         }
+
+        // Try npm audit API
+        try {
+          const result = await this.checkNpmAudit(name, cleanVersion);
+          if (result && result.vulnerabilities && result.vulnerabilities.length > 0) {
+            findings.push({
+              package: name,
+              currentVersion: version,
+              vulnerabilities: result.vulnerabilities,
+              recommendedFix: result.fixedVersion || null
+            });
+          }
+          setCache(cacheKey, result || { vulnerabilities: [], fixedVersion: null, timestamp: Date.now() });
+        } catch (error) {
+          logger.debug(`npm audit failed for ${name}: ${error.message}`);
+          // Try OSV as fallback
+          try {
+            const result = await this.checkOSV(name, cleanVersion);
+            if (result && result.vulnerabilities && result.vulnerabilities.length > 0) {
+              findings.push({
+                package: name,
+                currentVersion: version,
+                vulnerabilities: result.vulnerabilities,
+                recommendedFix: result.fixedVersion || null
+              });
+            }
+            setCache(cacheKey, result || { vulnerabilities: [], fixedVersion: null, timestamp: Date.now() });
+          } catch (e) {
+            logger.debug(`OSV also failed for ${name}`);
+          }
+        }
+
+        await this.delay(100);
       }
 
       return findings;
-
     } catch (error) {
-      logger.error('Error parsing package.json:', error);
+      logger.error('Error scanning package.json:', error);
       return [];
     }
   }
 
-  async checkVulnerability(name, version, getCache, setCache) {
-    const cacheKey = `npm:${name}:${version}`;
-
-    // Check cache first
-    const cached = getCache(cacheKey);
-    if (cached && cached.timestamp > Date.now() - config.cacheTTL) {
-      logger.debug(`Cache hit for ${name}@${version}`);
-      return cached.vulnerabilities.length > 0 ? cached : null;
-    }
-
+  async checkNpmAudit(name, version) {
     try {
-      // Try OSV API first
-      const osvResult = await this.checkOSV(name, version);
-
-      // If no vulnerabilities found in OSV, try npm audit
-      let npmResult = null;
-      if (!osvResult || osvResult.vulnerabilities.length === 0) {
-        npmResult = await this.checkNPMAudit(name, version);
-      }
-
-      const result = {
-        vulnerabilities: osvResult?.vulnerabilities || npmResult?.vulnerabilities || [],
-        fixedVersion: osvResult?.fixedVersion || npmResult?.fixedVersion || null,
-        timestamp: Date.now()
-      };
-
-      // Cache the result
-      setCache(cacheKey, result);
-
-      return result.vulnerabilities.length > 0 ? result : null;
-
-    } catch (error) {
-      logger.error(`Error checking ${name}@${version}:`, error.message);
-      return null;
-    }
-  }
-
-  async checkOSV(name, version) {
-    try {
-     
-      const response = await this.apiClient.post(config.osvApiUrl, {
-        package: {
-          name: name,
-          ecosystem: 'npm'
-        },
-        version: version
-      });
-
-      const vulns = response.data.vulns || [];
-
-      const formattedVulns = vulns.map(v => ({
-        id: v.id || v.cve,
-        severity: this.mapSeverity(v.severity),
-        summary: v.summary || 'No description available',
-        cve: v.cve || null,
-        fixedVersion: this.extractFixedVersion(v),
-        source: 'osv',
-        publishedDate: v.published || null,
-        references: v.references || []
-      }));
-
-      const fixedVersion = this.findLatestFixedVersion(vulns);
-
-      return {
-        vulnerabilities: formattedVulns,
-        fixedVersion: fixedVersion
-      };
-
-    } catch (error) {
-      if (error.response?.status === 404) {
-        return { vulnerabilities: [], fixedVersion: null };
-      }
-      throw error;
-    }
-  }
-
-  async checkNPMAudit(name, version) {
-    try {
-      const response = await this.apiClient.get(
-        `${config.npmRegistryUrl}/-/npm/v1/security/audits/quick`,
+      // Use npm registry audit endpoint
+      const response = await this.apiClient.post(
+        'https://registry.npmjs.org/-/npm/v1/security/audits',
         {
-          data: {
-            name: name,
-            version: version
-          }
+          name: name,
+          version: version
         }
       );
 
-      // Parse npm audit response
       const vulnerabilities = [];
-      if (response.data.actions?.length > 0) {
+      if (response.data && response.data.actions) {
         for (const action of response.data.actions) {
-          if (action.resolves?.length > 0) {
+          if (action.resolves) {
             for (const resolve of action.resolves) {
               vulnerabilities.push({
                 id: resolve.id || 'UNKNOWN',
@@ -170,26 +113,69 @@ class NPMScanner {
                 cve: resolve.cve || null,
                 fixedVersion: resolve.patch?.versions?.[0] || null,
                 source: 'npm-audit',
-                publishedDate: resolve.published_at || null
+                references: resolve.references || []
               });
             }
           }
         }
       }
 
-      // Extract fixed version
       const fixedVersion = vulnerabilities.length > 0
         ? vulnerabilities[0].fixedVersion
         : null;
 
-      return { vulnerabilities, fixedVersion };
-
+      return { vulnerabilities, fixedVersion, timestamp: Date.now() };
     } catch (error) {
       if (error.response?.status === 404) {
-        return { vulnerabilities: [], fixedVersion: null };
+        return { vulnerabilities: [], fixedVersion: null, timestamp: Date.now() };
       }
       throw error;
     }
+  }
+
+  async checkOSV(name, version) {
+    try {
+      const response = await this.apiClient.post(
+        'https://api.osv.dev/v1/query',
+        {
+          package: {
+            name: name,
+            ecosystem: 'npm'
+          },
+          version: version
+        }
+      );
+
+      return this.formatOSVResponse(response.data);
+    } catch (error) {
+      if (error.response?.status === 404) {
+        return { vulnerabilities: [], fixedVersion: null, timestamp: Date.now() };
+      }
+      throw error;
+    }
+  }
+
+  formatOSVResponse(data) {
+    const vulns = data.vulns || [];
+    
+    const formattedVulns = vulns.map(v => ({
+      id: v.id || v.cve || 'UNKNOWN',
+      severity: this.mapSeverity(v.severity),
+      summary: v.summary || 'No description available',
+      cve: v.cve || null,
+      fixedVersion: this.extractFixedVersion(v),
+      source: 'osv',
+      publishedDate: v.published || null,
+      references: v.references || []
+    }));
+
+    const fixedVersion = this.findLatestFixedVersion(vulns);
+
+    return {
+      vulnerabilities: formattedVulns,
+      fixedVersion: fixedVersion,
+      timestamp: Date.now()
+    };
   }
 
   cleanVersion(version) {
@@ -201,29 +187,16 @@ class NPMScanner {
   mapSeverity(severity) {
     if (!severity) return 'UNKNOWN';
 
-    let severityStr = '';
-
-    if (typeof severity === 'string') {
-      severityStr = severity;
-    } else if (typeof severity === 'object' && severity !== null) {
-      // Handle OSV severity object: { type: "CVSS_V3", score: "..." }
-      severityStr = severity.type || severity.severity || JSON.stringify(severity);
-    } else {
-      return 'UNKNOWN';
-    }
-
     const severityMap = {
       'critical': 'CRITICAL',
       'high': 'HIGH',
       'medium': 'MEDIUM',
       'moderate': 'MEDIUM',
       'low': 'LOW',
-      'info': 'LOW',
-      'cvss_v3': 'MEDIUM',
-      'cvss_v4': 'MEDIUM'
+      'info': 'LOW'
     };
 
-    const key = severityStr.toString().toLowerCase();
+    const key = severity.toString().toLowerCase();
     return severityMap[key] || 'UNKNOWN';
   }
 
@@ -250,7 +223,6 @@ class NPMScanner {
 
     if (fixedVersions.length === 0) return null;
 
-    // Sort by semver and return the highest
     const sorted = fixedVersions.sort((a, b) => semver.rcompare(a, b));
     return sorted[0];
   }

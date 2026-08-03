@@ -4,7 +4,7 @@
   "description": "GitHub bot to check for vulnerable dependencies",
   "main": "src/index.js",
   "bin": {
-    "depscan": "./src/cli.js"
+    "depscan": "./src/depscan.js"
   },
   "exports": {
     ".": "./src/index.js",

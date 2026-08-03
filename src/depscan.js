@@ -2,7 +2,7 @@
 const { program } = require('commander');
 const fs = require('fs');
 const path = require('path');
-const { scanNPM, scanPip, logger, config } = require('../src/index');
+const { scanNPM, scanPip, logger, config } = require('./index');
 
 program
   .version(require('../package.json').version)
@@ -55,7 +55,7 @@ program
   .description('Run as GitHub bot server')
   .option('-p, --port <port>', 'Port to listen on', '3000')
   .action(async (options) => {
-    const { runBot } = require('../src/index');
+    const { runBot } = require('./index');
     console.log(`🤖 Starting bot on port ${options.port}`);
     await runBot({ port: parseInt(options.port) });
   });
@@ -66,7 +66,7 @@ program
   .option('-c, --clear', 'Clear cache')
   .option('-s, --stats', 'Show cache stats')
   .action(async (options) => {
-    const { getCacheStats, cleanCache } = require('../src/utils/cache');
+    const { getCacheStats, cleanCache } = require('./utils/cache');
     if (options.clear) {
       require('../scripts/clear-cache')();
       console.log('✅ Cache cleared');
