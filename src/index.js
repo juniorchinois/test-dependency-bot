@@ -1,8 +1,10 @@
-// src/index.js - Supports both bot AND library
+// src/index.js - Main entry point
 const { Probot } = require('probot');
 const botApp = require('./app');
+const config = require('./config');
+const { logger } = require('./utils/logger');
 
-// Export as library (for programmatic use)
+// Export as library
 const libraryExports = {
   botApp,
   scanNPM: require('./scanners/npm-scanner').scanNPM,
@@ -13,7 +15,7 @@ const libraryExports = {
   config: require('./config'),
   formatComment: require('./utils/github').formatComment,
   formatErrorComment: require('./utils/github').formatErrorComment,
-  runBot: (options = {}) => {
+  runBot: async (options = {}) => {
     const probot = new Probot({
       appId: options.appId || process.env.APP_ID,
       privateKey: options.privateKey || process.env.PRIVATE_KEY,
@@ -21,20 +23,21 @@ const libraryExports = {
       ...options
     });
     probot.load(botApp);
-    return probot.start();
+    const server = await probot.start();
+    logger.info('🚀 Bot started successfully');
+    return server;
   }
 };
 
-// Export the bot function for Probot CLI (THIS IS THE KEY FIX)
+// Export bot function for Probot CLI
 module.exports = (app) => {
-  // Load your actual bot app
   botApp(app);
 };
 
-// Also attach library exports to the function
+// Attach library exports
 Object.assign(module.exports, libraryExports);
 
-// If run directly (node src/index.js), start bot
+// Run directly if main
 if (require.main === module) {
   const probot = new Probot({
     appId: process.env.APP_ID,
@@ -42,5 +45,10 @@ if (require.main === module) {
     secret: process.env.WEBHOOK_SECRET
   });
   probot.load(botApp);
-  probot.start();
+  probot.start().then(() => {
+    logger.info('🚀 Bot started successfully');
+  }).catch((error) => {
+    logger.error('Failed to start bot:', error);
+    process.exit(1);
+  });
 }

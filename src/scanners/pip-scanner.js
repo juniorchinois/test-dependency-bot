@@ -1,63 +1,139 @@
+// src/scanners/pip-scanner.js
 const axios = require('axios');
+const semver = require('semver');
 const { logger } = require('../utils/logger');
 const config = require('../config');
 
 class PipScanner {
   constructor() {
     this.apiClient = axios.create({
-      timeout: config.apiTimeout,
+      timeout: config.apiTimeout || 30000,
       headers: {
-        'User-Agent': 'Dependency-Vulnerability-Bot/1.0'
+        'User-Agent': 'Dependency-Vulnerability-Bot/1.0',
+        'Content-Type': 'application/json'
       }
     });
+    this.severityOrder = { 'CRITICAL': 5, 'HIGH': 4, 'MEDIUM': 3, 'LOW': 2, 'UNKNOWN': 1 };
+    this.retryDelay = config.retryDelay || 1000;
+    this.maxRetries = config.maxRetries || 3;
   }
 
   async scan(requirementsContent, getCache, setCache) {
     const findings = [];
+    const startTime = Date.now();
 
     try {
-      // Parse requirements.txt
       const dependencies = this.parseRequirements(requirementsContent);
-
       if (dependencies.length === 0) {
         logger.info('📦 No dependencies found in requirements.txt');
         return [];
       }
 
-      // Limit number of dependencies
-      const depsToScan = dependencies.slice(0, config.maxDependencies);
+      // Filter ignored packages
+      const filteredDeps = dependencies.filter(
+        dep => !config.ignoredPackages.includes(dep.name)
+      );
+
+      const depsToScan = filteredDeps.slice(0, config.maxDependencies || 100);
       logger.info(`🔍 Scanning ${depsToScan.length} pip dependencies`);
 
-      for (const dep of depsToScan) {
-        try {
-          const vulnerability = await this.checkVulnerability(
-            dep.name,
-            dep.version,
-            getCache,
-            setCache
-          );
+      // Process in batches
+      const batchSize = 10;
+      const totalBatches = Math.ceil(depsToScan.length / batchSize);
 
-          if (vulnerability) {
-            findings.push({
-              package: dep.name,
-              currentVersion: dep.version,
-              vulnerabilities: vulnerability.vulnerabilities,
-              recommendedFix: vulnerability.fixedVersion
-            });
+      for (let i = 0; i < depsToScan.length; i += batchSize) {
+        const batch = depsToScan.slice(i, i + batchSize);
+        const batchNumber = Math.floor(i / batchSize) + 1;
+
+        logger.debug(`📦 Processing batch ${batchNumber}/${totalBatches} (${batch.length} packages)`);
+
+        const batchPromises = batch.map(async (dep) => {
+          try {
+            return await this.scanDependency(dep, getCache, setCache);
+          } catch (error) {
+            logger.error(`Error scanning ${dep.name}:`, error.message);
+            return null;
           }
+        });
 
-          await this.delay(100);
+        const results = await Promise.allSettled(batchPromises);
 
-        } catch (error) {
-          logger.error(`Error scanning ${dep.name}:`, error.message);
+        for (const result of results) {
+          if (result.status === 'fulfilled' && result.value) {
+            findings.push(result.value);
+          }
+        }
+
+        // Rate limiting between batches
+        if (i + batchSize < depsToScan.length) {
+          await this.delay(500);
         }
       }
 
-      return findings;
+      const uniqueFindings = this.deduplicateFindings(findings);
+      const duration = Date.now() - startTime;
+      logger.info(`✅ pip scan completed in ${duration}ms, found ${uniqueFindings.length} vulnerabilities`);
 
+      return uniqueFindings;
     } catch (error) {
       logger.error('Error scanning requirements.txt:', error);
       return [];
+    }
+  }
+
+  async scanDependency(dep, getCache, setCache) {
+    const cacheKey = `pip:${dep.name}:${dep.version || 'latest'}`;
+    const cached = getCache(cacheKey);
+
+    // Check cache
+    if (cached && cached.timestamp > Date.now() - (config.cacheTTL || 86400000)) {
+      if (cached.vulnerabilities?.length > 0) {
+        logger.debug(`💾 Cache hit for ${dep.name}@${dep.version} (${cached.vulnerabilities.length} vulns)`);
+        return {
+          package: dep.name,
+          currentVersion: dep.version || 'latest',
+          vulnerabilities: cached.vulnerabilities,
+          recommendedFix: cached.fixedVersion || null,
+          severity: cached.severity || null
+        };
+      }
+      return null;
+    }
+
+    // Query OSV API
+    try {
+      const result = await this.checkOSV(dep.name, dep.version);
+
+      // Cache result
+      const cacheResult = {
+        vulnerabilities: result?.vulnerabilities || [],
+        fixedVersion: result?.fixedVersion || null,
+        severity: result?.severity || null,
+        timestamp: Date.now()
+      };
+      setCache(cacheKey, cacheResult);
+
+      if (result?.vulnerabilities?.length > 0) {
+        return {
+          package: dep.name,
+          currentVersion: dep.version || 'latest',
+          vulnerabilities: result.vulnerabilities,
+          recommendedFix: result.fixedVersion || null,
+          severity: result.severity || null
+        };
+      }
+      return null;
+    } catch (error) {
+      logger.error(`Error checking ${dep.name}@${dep.version}:`, error.message);
+      // Cache empty result to avoid repeated failures
+      setCache(cacheKey, {
+        vulnerabilities: [],
+        fixedVersion: null,
+        severity: null,
+        timestamp: Date.now(),
+        error: error.message
+      });
+      return null;
     }
   }
 
@@ -67,141 +143,270 @@ class PipScanner {
       .filter(line => line && !line.startsWith('#'));
 
     const dependencies = [];
+    const versionPatterns = [
+      /^([a-zA-Z0-9\-_.]+)\s*==\s*([0-9.]+)/,
+      /^([a-zA-Z0-9\-_.]+)\s*>=\s*([0-9.]+)/,
+      /^([a-zA-Z0-9\-_.]+)\s*<=\s*([0-9.]+)/,
+      /^([a-zA-Z0-9\-_.]+)\s*~\=\s*([0-9.]+)/,
+      /^([a-zA-Z0-9\-_.]+)\s*>\s*([0-9.]+)/,
+      /^([a-zA-Z0-9\-_.]+)\s*<\s*([0-9.]+)/,
+      /^([a-zA-Z0-9\-_.]+)\s*!=\s*([0-9.]+)/,
+      /^([a-zA-Z0-9\-_.]+)\s*@\s*([^\s]+)/ // URL-based dependencies
+    ];
 
     for (const line of lines) {
-      // Handle different formats: package==version, package>=version, package
-      const match = line.match(/^([a-zA-Z0-9\-_]+)\s*(?:==|>=|<=|>|<|~=)\s*([0-9.]+)/);
-      if (match) {
-        dependencies.push({
-          name: match[1],
-          version: match[2]
-        });
-      } else {
-        // Just package name without version
-        const nameMatch = line.match(/^([a-zA-Z0-9\-_]+)/);
+      let matched = false;
+
+      // Skip lines with invalid characters
+      if (line.includes(';') && !line.includes('#')) {
+        // Handle environment markers
+        const cleanLine = line.split(';')[0].trim();
+        if (cleanLine) {
+          const result = this.parseRequirementLine(cleanLine, versionPatterns);
+          if (result) dependencies.push(result);
+          matched = true;
+        }
+        continue;
+      }
+
+      const result = this.parseRequirementLine(line, versionPatterns);
+      if (result) {
+        dependencies.push(result);
+        matched = true;
+      }
+
+      if (!matched) {
+        // Try to extract just the package name
+        const nameMatch = line.match(/^([a-zA-Z0-9\-_.]+)/);
         if (nameMatch) {
-          // We'll need to check latest version
           dependencies.push({
             name: nameMatch[1],
-            version: null
+            version: null,
+            original: line
           });
         }
       }
     }
-
     return dependencies;
   }
 
-  async checkVulnerability(name, version, getCache, setCache) {
-    const cacheKey = `pip:${name}:${version || 'latest'}`;
-
-    // Check cache
-    const cached = getCache(cacheKey);
-    if (cached && cached.timestamp > Date.now() - config.cacheTTL) {
-      logger.debug(`Cache hit for ${name}@${version}`);
-      return cached.vulnerabilities.length > 0 ? cached : null;
+  parseRequirementLine(line, patterns) {
+    for (const pattern of patterns) {
+      const match = line.match(pattern);
+      if (match) {
+        return {
+          name: match[1],
+          version: match[2],
+          original: line
+        };
+      }
     }
-
-    try {
-      // Check OSV API for Python packages
-      const result = await this.checkOSV(name, version);
-
-      const cacheResult = {
-        vulnerabilities: result?.vulnerabilities || [],
-        fixedVersion: result?.fixedVersion || null,
-        timestamp: Date.now()
-      };
-
-      setCache(cacheKey, cacheResult);
-
-      return cacheResult.vulnerabilities.length > 0 ? cacheResult : null;
-
-    } catch (error) {
-      logger.error(`Error checking ${name}@${version}:`, error.message);
-      return null;
-    }
+    return null;
   }
 
   async checkOSV(name, version) {
-    try {
-      
-      const requestBody = {
-        package: {
-          name: name,
-          ecosystem: 'PyPI'
+    let lastError = null;
+
+    for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
+      try {
+        const requestBody = {
+          package: {
+            name: name,
+            ecosystem: 'PyPI'
+          }
+        };
+        if (version) {
+          requestBody.version = version;
         }
-      };
 
-      if (version) {
-        requestBody.version = version;
+        const response = await this.apiClient.post(
+          config.osvApiUrl || 'https://api.osv.dev/v1/query',
+          requestBody,
+          {
+            timeout: 15000,
+            validateStatus: (status) => status < 500
+          }
+        );
+
+        if (response.status === 429) {
+          // Rate limited - wait and retry
+          const waitTime = parseInt(response.headers['retry-after']) * 1000 || 5000;
+          logger.warn(`⏳ Rate limited for ${name}, waiting ${waitTime}ms`);
+          await this.delay(waitTime);
+          continue;
+        }
+
+        if (response.status === 404) {
+          return { vulnerabilities: [], fixedVersion: null, severity: null };
+        }
+
+        if (response.status !== 200) {
+          throw new Error(`OSV API returned ${response.status}: ${JSON.stringify(response.data)}`);
+        }
+
+        const vulns = response.data.vulns || [];
+        const formattedVulns = [];
+        let bestFix = null;
+        let highestSeverity = 'UNKNOWN';
+        let highestSeverityScore = 0;
+
+        for (const v of vulns) {
+          const severity = this.extractSeverity(v);
+          const fixedVersion = this.extractFixedVersion(v);
+          const cvssScore = this.extractCVSSScore(v);
+          const cve = this.extractCVE(v);
+
+          // Track highest severity
+          const severityScore = this.severityOrder[severity] || 0;
+          if (severityScore > highestSeverityScore) {
+            highestSeverityScore = severityScore;
+            highestSeverity = severity;
+          }
+
+          // Track best fix
+          if (fixedVersion) {
+            if (!bestFix) {
+              bestFix = fixedVersion;
+            } else {
+              // Choose the most recent/safe version
+              const currentBest = semver.valid(bestFix);
+              const newFix = semver.valid(fixedVersion);
+              if (currentBest && newFix && semver.gt(newFix, currentBest)) {
+                bestFix = fixedVersion;
+              }
+            }
+          }
+
+          formattedVulns.push({
+            id: v.id || 'UNKNOWN',
+            severity: severity,
+            summary: v.summary || v.details || 'No description available',
+            cve: cve,
+            fixedVersion: fixedVersion,
+            cvssScore: cvssScore,
+            source: 'osv',
+            references: v.references?.map(r => r.url) || [],
+            published: v.published || null,
+            modified: v.modified || null,
+            aliases: v.aliases || []
+          });
+        }
+
+        return {
+          vulnerabilities: formattedVulns,
+          fixedVersion: bestFix,
+          severity: highestSeverity,
+          timestamp: Date.now()
+        };
+
+      } catch (error) {
+        lastError = error;
+        if (attempt < this.maxRetries) {
+          const delay = this.retryDelay * Math.pow(2, attempt - 1);
+          logger.warn(`⚠️ Retry ${attempt}/${this.maxRetries} for ${name} after ${delay}ms`);
+          await this.delay(delay);
+        }
       }
-
-      const response = await this.apiClient.post(config.osvApiUrl, requestBody);
-
-      const vulns = response.data.vulns || [];
-
-      const formattedVulns = vulns.map(v => ({
-        id: v.id || v.cve,
-        severity: this.mapSeverity(v.severity),
-        summary: v.summary || 'No description available',
-        cve: v.cve || null,
-        fixedVersion: this.extractFixedVersion(v),
-        source: 'osv',
-        publishedDate: v.published || null,
-        references: v.references || []
-      }));
-
-      const fixedVersion = this.findLatestFixedVersion(vulns);
-
-      return {
-        vulnerabilities: formattedVulns,
-        fixedVersion: fixedVersion
-      };
-
-    } catch (error) {
-      if (error.response?.status === 404) {
-        return { vulnerabilities: [], fixedVersion: null };
-      }
-      throw error;
     }
+
+    throw lastError || new Error(`Failed to check ${name} after ${this.maxRetries} attempts`);
   }
 
-  mapSeverity(severity) {
-    if (!severity) return 'UNKNOWN';
+  extractSeverity(vuln) {
+    if (!vuln) return 'UNKNOWN';
 
-    let severityStr = '';
-
-    if (typeof severity === 'string') {
-      severityStr = severity;
-    } else if (typeof severity === 'object' && severity !== null) {
-      // Handle OSV severity object: { type: "CVSS_V3", score: "..." }
-      severityStr = severity.type || severity.severity || JSON.stringify(severity);
-    } else {
-      return 'UNKNOWN';
+    // Check for CVSS scores in severity array
+    if (Array.isArray(vuln.severity)) {
+      for (const s of vuln.severity) {
+        if (s.type && (s.type.includes('CVSS') || s.type.includes('cvss'))) {
+          const score = parseFloat(s.score);
+          if (!isNaN(score)) {
+            if (score >= 9.0) return 'CRITICAL';
+            if (score >= 7.0) return 'HIGH';
+            if (score >= 4.0) return 'MEDIUM';
+            if (score > 0) return 'LOW';
+          }
+        }
+      }
     }
 
-    const severityMap = {
-      'critical': 'CRITICAL',
-      'high': 'HIGH',
-      'medium': 'MEDIUM',
-      'moderate': 'MEDIUM',
-      'low': 'LOW',
-      'info': 'LOW',
-      'cvss_v3': 'MEDIUM',
-      'cvss_v4': 'MEDIUM'
-    };
+    // Check database_specific
+    if (vuln.database_specific) {
+      if (vuln.database_specific.severity) {
+        const mapped = this.mapSeverity(vuln.database_specific.severity);
+        if (mapped !== 'UNKNOWN') return mapped;
+      }
+      if (vuln.database_specific.cvss) {
+        const cvss = vuln.database_specific.cvss;
+        const score = cvss.score || cvss.cvss_score || cvss.baseScore;
+        if (score) {
+          const numScore = parseFloat(score);
+          if (!isNaN(numScore)) {
+            if (numScore >= 9.0) return 'CRITICAL';
+            if (numScore >= 7.0) return 'HIGH';
+            if (numScore >= 4.0) return 'MEDIUM';
+            if (numScore > 0) return 'LOW';
+          }
+        }
+      }
+    }
 
-    const key = severityStr.toString().toLowerCase();
-    return severityMap[key] || 'UNKNOWN';
+    // Check aliases for severity patterns
+    if (vuln.aliases) {
+      for (const alias of vuln.aliases) {
+        const upper = alias.toUpperCase();
+        if (upper.includes('CRITICAL')) return 'CRITICAL';
+        if (upper.includes('HIGH')) return 'HIGH';
+        if (upper.includes('MEDIUM') || upper.includes('MODERATE')) return 'MEDIUM';
+        if (upper.includes('LOW')) return 'LOW';
+      }
+    }
+
+    return 'UNKNOWN';
+  }
+
+  extractCVSSScore(vuln) {
+    if (!vuln) return null;
+
+    if (Array.isArray(vuln.severity)) {
+      for (const s of vuln.severity) {
+        if (s.type && (s.type.includes('CVSS') || s.type.includes('cvss'))) {
+          const score = parseFloat(s.score);
+          if (!isNaN(score)) return score;
+        }
+      }
+    }
+
+    if (vuln.database_specific?.cvss) {
+      const cvss = vuln.database_specific.cvss;
+      const score = cvss.score || cvss.cvss_score || cvss.baseScore;
+      const numScore = parseFloat(score);
+      if (!isNaN(numScore)) return numScore;
+    }
+
+    return null;
+  }
+
+  extractCVE(vuln) {
+    if (!vuln) return null;
+
+    if (vuln.aliases) {
+      const cve = vuln.aliases.find(a => a.startsWith('CVE-'));
+      if (cve) return cve;
+    }
+    if (vuln.id && vuln.id.startsWith('CVE-')) return vuln.id;
+    if (vuln.cve) return vuln.cve;
+    return null;
   }
 
   extractFixedVersion(vuln) {
-    const affected = vuln?.affected || [];
-    for (const item of affected) {
-      const ranges = item?.ranges || [];
-      for (const range of ranges) {
-        const events = range?.events || [];
-        for (const event of events) {
+    if (!vuln || !vuln.affected) return null;
+
+    for (const affected of vuln.affected) {
+      if (!affected.ranges) continue;
+      for (const range of affected.ranges) {
+        if (!range.events) continue;
+        for (const event of range.events) {
           if (event.fixed) {
             return event.fixed;
           }
@@ -211,27 +416,60 @@ class PipScanner {
     return null;
   }
 
-  findLatestFixedVersion(vulns) {
-    const fixedVersions = vulns
-      .map(v => this.extractFixedVersion(v))
-      .filter(v => v !== null);
+  mapSeverity(severity) {
+    if (!severity) return 'UNKNOWN';
+    const map = {
+      'critical': 'CRITICAL',
+      'high': 'HIGH',
+      'medium': 'MEDIUM',
+      'moderate': 'MEDIUM',
+      'low': 'LOW',
+      'none': 'LOW',
+      'info': 'LOW'
+    };
+    return map[String(severity).toLowerCase()] || 'UNKNOWN';
+  }
 
-    if (fixedVersions.length === 0) return null;
+  deduplicateFindings(findings) {
+    const unique = new Map();
 
-    // Sort versions (simplified for Python versions)
-    const sorted = fixedVersions.sort((a, b) => {
-      const partsA = a.split('.').map(Number);
-      const partsB = b.split('.').map(Number);
-
-      for (let i = 0; i < Math.max(partsA.length, partsB.length); i++) {
-        const numA = partsA[i] || 0;
-        const numB = partsB[i] || 0;
-        if (numA !== numB) return numB - numA;
+    for (const finding of findings) {
+      if (!unique.has(finding.package)) {
+        unique.set(finding.package, {
+          ...finding,
+          vulnerabilities: [...finding.vulnerabilities]
+        });
+      } else {
+        const existing = unique.get(finding.package);
+        // Merge vulnerabilities
+        const mergedVulns = [...existing.vulnerabilities, ...finding.vulnerabilities];
+        // Deduplicate by ID
+        const uniqueVulns = mergedVulns.filter((v, index, self) =>
+          index === self.findIndex(t => t.id === v.id)
+        );
+        existing.vulnerabilities = uniqueVulns;
+        // Keep the best fix
+        if (finding.recommendedFix && existing.recommendedFix) {
+          const v1 = semver.valid(existing.recommendedFix);
+          const v2 = semver.valid(finding.recommendedFix);
+          if (v1 && v2 && semver.gt(v2, v1)) {
+            existing.recommendedFix = finding.recommendedFix;
+          }
+        } else if (finding.recommendedFix) {
+          existing.recommendedFix = finding.recommendedFix;
+        }
+        // Update severity if needed
+        if (finding.severity) {
+          const currentScore = this.severityOrder[existing.severity] || 0;
+          const newScore = this.severityOrder[finding.severity] || 0;
+          if (newScore > currentScore) {
+            existing.severity = finding.severity;
+          }
+        }
       }
-      return 0;
-    });
+    }
 
-    return sorted[0];
+    return Array.from(unique.values());
   }
 
   delay(ms) {

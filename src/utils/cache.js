@@ -1,34 +1,61 @@
+// src/utils/cache.js
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
 const { logger } = require('./logger');
+const config = require('../config');
 
-// Use temp directory instead of node_modules
-const CACHE_DIR = process.env.DEPSCAN_CACHE_DIR || path.join(os.tmpdir(), 'depscan-cache');
+const CACHE_DIR = path.join(__dirname, '../../data');
 const CACHE_FILE = path.join(CACHE_DIR, 'cache.json');
 const MAX_CACHE_SIZE = 10000;
 
-// LAZY INITIALIZATION - NOT on require()
 let cache = {};
 let cacheDirty = false;
 let initialized = false;
 let saveTimeout = null;
-let cleanupInterval = null;
-let signalHandlersRegistered = false;
+let saveQueue = [];
 
 function ensureCacheDir() {
   if (!fs.existsSync(CACHE_DIR)) {
     fs.mkdirSync(CACHE_DIR, { recursive: true });
+    logger.info(`📁 Created cache directory: ${CACHE_DIR}`);
   }
 }
 
+function initialize() {
+  if (initialized) return;
+  ensureCacheDir();
+  loadCache();
+  initialized = true;
+  
+  // Handle process exit
+  process.on('exit', () => { saveCacheSync(); });
+  process.on('SIGINT', () => { saveCacheSync(); process.exit(0); });
+  process.on('SIGTERM', () => { saveCacheSync(); process.exit(0); });
+  
+  logger.info(`📦 Cache initialized with ${Object.keys(cache).length} entries`);
+}
+
 function loadCache() {
-  if (!initialized) return;
   try {
     if (fs.existsSync(CACHE_FILE)) {
       const data = fs.readFileSync(CACHE_FILE, 'utf8');
-      cache = JSON.parse(data);
-      logger.debug(`📦 Cache loaded with ${Object.keys(cache).length} entries`);
+      const parsed = JSON.parse(data);
+      
+      // Validate cache entries and remove expired ones
+      const now = Date.now();
+      const ttl = config.cacheTTL || 86400000;
+      const validEntries = {};
+      
+      for (const [key, value] of Object.entries(parsed)) {
+        if (value.timestamp && (now - value.timestamp) < ttl) {
+          validEntries[key] = value;
+        }
+      }
+      
+      cache = validEntries;
+      logger.debug(`📦 Cache loaded with ${Object.keys(cache).length} valid entries (${Object.keys(parsed).length - Object.keys(cache).length} expired)`);
+    } else {
+      logger.debug('📦 No cache file found, starting fresh');
     }
   } catch (error) {
     logger.error('Error loading cache:', error);
@@ -36,24 +63,22 @@ function loadCache() {
   }
 }
 
-function saveCache() {
+function saveCacheSync() {
   if (!cacheDirty || !initialized) return;
   try {
     ensureCacheDir();
+    
+    // Limit cache size
     const keys = Object.keys(cache);
     if (keys.length > MAX_CACHE_SIZE) {
-      const sorted = keys.sort((a, b) => {
-        const aTime = cache[a]?.timestamp || 0;
-        const bTime = cache[b]?.timestamp || 0;
-        return bTime - aTime;
-      });
-      const toKeep = sorted.slice(0, MAX_CACHE_SIZE);
+      const sorted = keys.sort((a, b) => (cache[b]?.timestamp || 0) - (cache[a]?.timestamp || 0));
       const newCache = {};
-      for (const key of toKeep) {
+      for (const key of sorted.slice(0, MAX_CACHE_SIZE)) {
         newCache[key] = cache[key];
       }
       cache = newCache;
     }
+    
     fs.writeFileSync(CACHE_FILE, JSON.stringify(cache, null, 2));
     cacheDirty = false;
     logger.debug(`💾 Cache saved with ${Object.keys(cache).length} entries`);
@@ -62,122 +87,104 @@ function saveCache() {
   }
 }
 
-// NEW: Explicit initialization function
-function initialize() {
-  if (initialized) return;
-  ensureCacheDir();
-  loadCache();
-  initialized = true;
+function saveCacheAsync() {
+  if (!cacheDirty || !initialized) return;
   
-  // .unref() so it doesn't block process exit
-  if (!cleanupInterval) {
-    cleanupInterval = setInterval(cleanCache, 60 * 60 * 1000);
-    cleanupInterval.unref();
-  }
-  
-  if (!signalHandlersRegistered) {
-    process.on('exit', saveCache);
-    process.on('SIGINT', () => {
-      saveCache();
-      process.exit(0);
-    });
-    signalHandlersRegistered = true;
-  }
+  // Debounce saves
+  clearTimeout(saveTimeout);
+  saveTimeout = setTimeout(() => {
+    saveCacheSync();
+  }, 5000);
 }
 
 function getCached(key) {
-  if (!initialized) initialize(); // Lazy init
+  if (!initialized) initialize();
+  
   const entry = cache[key];
-  if (entry) {
-    logger.debug(`Cache hit: ${key}`);
-    return entry;
+  if (!entry) return null;
+  
+  // Check if expired
+  const now = Date.now();
+  const ttl = config.cacheTTL || 86400000;
+  if (entry.timestamp && (now - entry.timestamp) > ttl) {
+    delete cache[key];
+    cacheDirty = true;
+    return null;
   }
-  logger.debug(`Cache miss: ${key}`);
-  return null;
+  
+  return entry;
 }
 
 function setCached(key, value) {
-  if (!initialized) initialize(); // Lazy init
+  if (!initialized) initialize();
+  
+  // Ensure value has timestamp
+  if (!value.timestamp) {
+    value.timestamp = Date.now();
+  }
+  
   cache[key] = value;
   cacheDirty = true;
-  if (value.vulnerabilities?.length > 0) {
-    saveCache();
-  } else {
-    clearTimeout(saveTimeout);
-    saveTimeout = setTimeout(saveCache, 5000);
-    saveTimeout.unref(); // Don't block process exit
-  }
-}
-
-function cleanCache() {
-  if (!initialized) return;
-  const now = Date.now();
-  const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
-  let cleaned = false;
-  for (const [key, value] of Object.entries(cache)) {
-    if (value.timestamp < weekAgo) {
-      delete cache[key];
-      cleaned = true;
-    }
-  }
-  if (cleaned) {
-    cacheDirty = true;
-    saveCache();
-    logger.debug(`🧹 Cache cleaned: removed entries older than 7 days`);
-  }
+  saveCacheAsync();
 }
 
 function getCacheStats() {
   if (!initialized) initialize();
-  const total = Object.keys(cache).length;
-  const timestamp = Date.now();
-  let oldCount = 0;
-  let freshCount = 0;
-  for (const value of Object.values(cache)) {
-    if (value.timestamp && timestamp - value.timestamp > 86400000) {
-      oldCount++;
+  const now = Date.now();
+  const ttl = config.cacheTTL || 86400000;
+  
+  let validCount = 0;
+  let expiredCount = 0;
+  
+  for (const [key, value] of Object.entries(cache)) {
+    if (value.timestamp && (now - value.timestamp) < ttl) {
+      validCount++;
     } else {
-      freshCount++;
+      expiredCount++;
     }
   }
+  
   return {
-    totalEntries: total,
-    freshEntries: freshCount,
-    oldEntries: oldCount,
-    cacheDir: CACHE_DIR,
+    totalEntries: Object.keys(cache).length,
+    validEntries: validCount,
+    expiredEntries: expiredCount,
+    maxSize: MAX_CACHE_SIZE,
     cacheFile: CACHE_FILE,
-    lastSave: fs.existsSync(CACHE_FILE) ? fs.statSync(CACHE_FILE).mtime : null
+    cacheDir: CACHE_DIR,
+    lastSave: fs.existsSync(CACHE_FILE) ? fs.statSync(CACHE_FILE).mtime : null,
+    fileSize: fs.existsSync(CACHE_FILE) ? fs.statSync(CACHE_FILE).size : 0
   };
 }
 
-// NEW: Clean shutdown
 function shutdown() {
-  if (cleanupInterval) {
-    clearInterval(cleanupInterval);
-    cleanupInterval = null;
-  }
-  saveCache();
+  saveCacheSync();
+  logger.info('💾 Cache saved on shutdown');
 }
 
-// REMOVED: No top-level loadCache(), setInterval(), or process.on()
-// All of that is now inside initialize()
+function cleanCache() {
+  cache = {};
+  cacheDirty = true;
+  saveCacheSync();
+  logger.info('🧹 Cache cleaned');
+}
+
+function getCacheKeys() {
+  if (!initialized) initialize();
+  return Object.keys(cache);
+}
+
+function getCacheEntry(key) {
+  if (!initialized) initialize();
+  return cache[key] || null;
+}
 
 module.exports = { 
   getCached, 
   setCached, 
   getCacheStats, 
+  initialize, 
+  shutdown,
   cleanCache,
-  initialize,  // NEW: Export init function
-  shutdown,    // NEW: Export shutdown function
-  reset: () => {
-    if (cleanupInterval) {
-      clearInterval(cleanupInterval);
-      cleanupInterval = null;
-    }
-    clearTimeout(saveTimeout);
-    cache = {};
-    cacheDirty = false;
-    initialized = false;
-    signalHandlersRegistered = false;
-  }
+  getCacheKeys,
+  getCacheEntry
 };

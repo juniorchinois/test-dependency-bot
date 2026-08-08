@@ -1,50 +1,74 @@
+// src/config.js
 require('dotenv').config();
+const { logger } = require('./utils/logger');
 
-module.exports = {
+// Cache TTL in seconds from .env, convert to milliseconds
+const cacheTTLSeconds = parseInt(process.env.CACHE_TTL, 10);
+const cacheTTL = Number.isFinite(cacheTTLSeconds) && cacheTTLSeconds > 0
+  ? cacheTTLSeconds * 1000
+  : 86400000; // 1 day default
+
+const config = {
   // Severity threshold
-  severityThreshold: process.env.SEVERITY_THRESHOLD || 'HIGH',
+  severityThreshold: (process.env.SEVERITY_THRESHOLD || 'HIGH').toUpperCase(),
   
-  // Cache TTL in milliseconds (default: 24 hours)
-  cacheTTL: parseInt(process.env.CACHE_TTL) || 86400000,
+  // Cache configuration
+  cacheTTL: cacheTTL,
   
-  // Maximum dependencies to check per scan
-  maxDependencies: parseInt(process.env.MAX_DEPENDENCIES) || 100,
+  // Dependencies limit
+  maxDependencies: parseInt(process.env.MAX_DEPENDENCIES, 10) || 100,
   
-  // Ignored packages
-  ignoredPackages: process.env.IGNORED_PACKAGES?.split(',').map(p => p.trim()) || [],
+  // Ignored packages (comma-separated)
+  ignoredPackages: process.env.IGNORED_PACKAGES
+    ? process.env.IGNORED_PACKAGES.split(',').map(p => p.trim()).filter(Boolean)
+    : [],
   
-  // API timeout in milliseconds
-  apiTimeout: parseInt(process.env.API_TIMEOUT) || 15000,
+  // API settings
+  apiTimeout: parseInt(process.env.API_TIMEOUT, 10) || 30000,
+  maxRetries: parseInt(process.env.MAX_RETRIES, 10) || 3,
+  retryDelay: parseInt(process.env.RETRY_DELAY, 10) || 1000,
   
-  // Skip forks
- skipForks: process.env.SKIP_FORKS !== 'false',
+  // Repository settings
+  skipForks: process.env.SKIP_FORKS !== 'false',
   
-  // Always create new comment instead of updating
+  // Comment management
   alwaysCreateNewComment: process.env.ALWAYS_CREATE_NEW_COMMENT === 'true',
-  
-  // Remove old comments when no vulnerabilities found
   removeOldComments: process.env.REMOVE_OLD_COMMENTS === 'true',
   
-  // OSV API URL
+  // API URLs
   osvApiUrl: process.env.OSV_API_URL || 'https://api.osv.dev/v1/query',
-  
-  // NPM registry URL
   npmRegistryUrl: process.env.NPM_REGISTRY_URL || 'https://registry.npmjs.org',
-  
-  // PyPI registry URL
   pypiRegistryUrl: process.env.PYPI_REGISTRY_URL || 'https://pypi.org/pypi',
   
-  // Maximum retries for API calls
-  maxRetries: parseInt(process.env.MAX_RETRIES) || 3,
-  
-  // Retry delay in milliseconds
-  retryDelay: parseInt(process.env.RETRY_DELAY) || 1000,
-  
-  // Enable/disable specific ecosystems
+  // Ecosystem support
   ecosystems: {
     npm: process.env.ENABLE_NPM !== 'false',
     pip: process.env.ENABLE_PIP !== 'false',
-    yarn: process.env.ENABLE_YARN !== 'false',
-    poetry: process.env.ENABLE_POETRY !== 'false'
+    yarn: process.env.ENABLE_YARN === 'true',
+    poetry: process.env.ENABLE_POETRY === 'true'
   }
 };
+
+// Validate configuration
+const validSeverities = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
+if (!validSeverities.includes(config.severityThreshold)) {
+  logger.warn(`Invalid SEVERITY_THRESHOLD: ${config.severityThreshold}. Using 'HIGH' as default.`);
+  config.severityThreshold = 'HIGH';
+}
+
+if (config.maxDependencies < 1 || config.maxDependencies > 1000) {
+  logger.warn(`Invalid MAX_DEPENDENCIES: ${config.maxDependencies}. Using 100 as default.`);
+  config.maxDependencies = 100;
+}
+
+// Log configuration on startup
+logger.debug('Configuration loaded:', {
+  severityThreshold: config.severityThreshold,
+  cacheTTL: config.cacheTTL / 1000 + 's',
+  maxDependencies: config.maxDependencies,
+  ignoredPackages: config.ignoredPackages,
+  skipForks: config.skipForks,
+  ecosystems: config.ecosystems
+});
+
+module.exports = config;

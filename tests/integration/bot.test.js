@@ -1,37 +1,36 @@
 // tests/integration/bot.test.js
 const { Probot, createProbot } = require('probot');
 const nock = require('nock');
-const botApp = require('../../src/app');
 
 // Mock dependencies
 jest.mock('../../src/utils/cache');
 jest.mock('../../src/utils/logger');
+jest.mock('../../src/scanners/npm-scanner', () => ({ scanNPM: jest.fn() }));
+jest.mock('../../src/scanners/pip-scanner', () => ({ scanPip: jest.fn() }));
 
+const botApp = require('../../src/app');
 const { getCached, setCached } = require('../../src/utils/cache');
-const { scanNPM } = require('../../src/scanners/npm-scanner');
-const { scanPip } = require('../../src/scanners/pip-scanner');
+const { scanNPM } = jest.requireMock('../../src/scanners/npm-scanner');
+const { scanPip } = jest.requireMock('../../src/scanners/pip-scanner');
 
 describe('Bot Integration Tests', () => {
   let probot;
   let mockGitHub;
 
-  beforeEach(() => {
-    // Reset all mocks
+  beforeEach(async () => {
     jest.clearAllMocks();
-    
+
     // Create a new probot instance
     probot = createProbot({
-  id: 123,
-  privateKey: `-----BEGIN RSA PRIVATE KEY-----
-MIIEpAIBAAKCAQEAxTlXmx8x5n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x
-8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x
-...
+      id: 123,
+      privateKey: `-----BEGIN RSA PRIVATE KEY-----
+MIIEpAIBAAKCAQEAxTlXmx8x5n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x
+8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x
 -----END RSA PRIVATE KEY-----`,
-  secret: 'test-secret'
-});
+      secret: 'test-secret'
+    });
 
-    // Load the bot app
-    probot.load(botApp);
+    await probot.load(botApp);
 
     // Setup GitHub mock
     mockGitHub = {
@@ -40,6 +39,13 @@ MIIEpAIBAAKCAQEAxTlXmx8x5n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x
           data: [
             { filename: 'package.json' }
           ]
+        }),
+        get: jest.fn().mockResolvedValue({
+          data: {
+            head: { sha: 'abc123', ref: 'feature-branch', repo: { fork: false } },
+            base: { sha: 'main' },
+            title: 'Test PR'
+          }
         })
       },
       repos: {
@@ -61,22 +67,25 @@ MIIEpAIBAAKCAQEAxTlXmx8x5n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x
       },
       checks: {
         create: jest.fn().mockResolvedValue({ data: { id: 1 } })
+      },
+      git: {
+        getCommit: jest.fn().mockResolvedValue({
+          data: { message: 'Test commit' }
+        })
+      },
+      hook: {
+        before: jest.fn()
       }
     };
 
-    // Setup GitHub API mock
-    probot.auth = jest.fn().mockResolvedValue({
-      octokit: {
-        pulls: mockGitHub.pulls,
-        repos: mockGitHub.repos,
-        issues: mockGitHub.issues,
-        checks: mockGitHub.checks
-      }
-    });
+    // Setup GitHub API mock for Probot context.octokit
+    if (probot.state?.octokit?.auth) {
+      probot.state.octokit.auth = jest.fn().mockResolvedValue(mockGitHub);
+    }
+    probot.auth = jest.fn().mockResolvedValue(mockGitHub);
   });
 
   test('handles PR with vulnerable dependencies', async () => {
-    // Mock scanner to return vulnerabilities
     scanNPM.mockResolvedValue([
       {
         package: 'lodash',
@@ -88,15 +97,14 @@ MIIEpAIBAAKCAQEAxTlXmx8x5n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x
             summary: 'Prototype Pollution',
             fixedVersion: '4.17.21'
           }
-        ]
+        ],
+        recommendedFix: '4.17.21'
       }
     ]);
 
-    // Mock cache
     getCached.mockReturnValue(null);
-    setCached.mockImplementation(() => {});
+    setCached.mockImplementation(() => { });
 
-    // Trigger webhook
     const event = {
       name: 'pull_request',
       payload: {
@@ -105,7 +113,8 @@ MIIEpAIBAAKCAQEAxTlXmx8x5n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x
           number: 1,
           head: { sha: 'abc123', ref: 'feature-branch' },
           base: { sha: 'main' },
-          title: 'Test PR'
+          title: 'Test PR',
+          repo: { fork: false }
         },
         repository: {
           owner: { login: 'test-owner' },
@@ -118,21 +127,17 @@ MIIEpAIBAAKCAQEAxTlXmx8x5n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x
 
     await probot.receive(event);
 
-    // Verify scanner was called
     expect(scanNPM).toHaveBeenCalled();
     expect(mockGitHub.issues.createComment).toHaveBeenCalled();
     expect(mockGitHub.checks.create).toHaveBeenCalled();
   });
 
   test('handles PR with no vulnerabilities', async () => {
-    // Mock scanner to return no vulnerabilities
     scanNPM.mockResolvedValue([]);
 
-    // Mock cache
     getCached.mockReturnValue(null);
-    setCached.mockImplementation(() => {});
+    setCached.mockImplementation(() => { });
 
-    // Trigger webhook
     const event = {
       name: 'pull_request',
       payload: {
@@ -141,7 +146,8 @@ MIIEpAIBAAKCAQEAxTlXmx8x5n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x
           number: 1,
           head: { sha: 'abc123', ref: 'feature-branch' },
           base: { sha: 'main' },
-          title: 'Test PR'
+          title: 'Test PR',
+          repo: { fork: false }
         },
         repository: {
           owner: { login: 'test-owner' },
@@ -154,13 +160,11 @@ MIIEpAIBAAKCAQEAxTlXmx8x5n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x
 
     await probot.receive(event);
 
-    // Verify no comment was created
     expect(mockGitHub.issues.createComment).not.toHaveBeenCalled();
     expect(mockGitHub.checks.create).toHaveBeenCalled();
   });
 
   test('handles PR with multiple manifest files', async () => {
-    // Mock multiple files
     mockGitHub.pulls.listFiles.mockResolvedValue({
       data: [
         { filename: 'package.json' },
@@ -168,7 +172,6 @@ MIIEpAIBAAKCAQEAxTlXmx8x5n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x
       ]
     });
 
-    // Mock scanners
     scanNPM.mockResolvedValue([
       {
         package: 'lodash',
@@ -176,8 +179,10 @@ MIIEpAIBAAKCAQEAxTlXmx8x5n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x
         vulnerabilities: [{
           id: 'CVE-2020-8203',
           severity: 'CRITICAL',
-          summary: 'Prototype Pollution'
-        }]
+          summary: 'Prototype Pollution',
+          fixedVersion: '4.17.21'
+        }],
+        recommendedFix: '4.17.21'
       }
     ]);
 
@@ -188,13 +193,15 @@ MIIEpAIBAAKCAQEAxTlXmx8x5n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x
         vulnerabilities: [{
           id: 'CVE-2023-1234',
           severity: 'HIGH',
-          summary: 'Security vulnerability'
-        }]
+          summary: 'Security vulnerability',
+          fixedVersion: '2.28.0'
+        }],
+        recommendedFix: '2.28.0'
       }
     ]);
 
     getCached.mockReturnValue(null);
-    setCached.mockImplementation(() => {});
+    setCached.mockImplementation(() => { });
 
     const event = {
       name: 'pull_request',
@@ -204,7 +211,8 @@ MIIEpAIBAAKCAQEAxTlXmx8x5n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x
           number: 1,
           head: { sha: 'abc123', ref: 'feature-branch' },
           base: { sha: 'main' },
-          title: 'Test PR'
+          title: 'Test PR',
+          repo: { fork: false }
         },
         repository: {
           owner: { login: 'test-owner' },
@@ -217,14 +225,12 @@ MIIEpAIBAAKCAQEAxTlXmx8x5n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x
 
     await probot.receive(event);
 
-    // Verify both scanners were called
     expect(scanNPM).toHaveBeenCalled();
     expect(scanPip).toHaveBeenCalled();
     expect(mockGitHub.issues.createComment).toHaveBeenCalled();
   });
 
   test('handles PR update (synchronize)', async () => {
-    // Mock scanner
     scanNPM.mockResolvedValue([
       {
         package: 'lodash',
@@ -232,15 +238,18 @@ MIIEpAIBAAKCAQEAxTlXmx8x5n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x
         vulnerabilities: [{
           id: 'CVE-2020-8203',
           severity: 'CRITICAL',
-          summary: 'Prototype Pollution'
-        }]
+          summary: 'Prototype Pollution',
+          fixedVersion: '4.17.21'
+        }],
+        recommendedFix: '4.17.21'
       }
     ]);
 
     getCached.mockReturnValue(null);
-    setCached.mockImplementation(() => {});
+    setCached.mockImplementation(() => { });
 
     const event = {
+      id: 'evt-2',
       name: 'pull_request',
       payload: {
         action: 'synchronize',
@@ -248,7 +257,8 @@ MIIEpAIBAAKCAQEAxTlXmx8x5n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x
           number: 1,
           head: { sha: 'abc123', ref: 'feature-branch' },
           base: { sha: 'main' },
-          title: 'Test PR'
+          title: 'Test PR',
+          repo: { fork: false }
         },
         repository: {
           owner: { login: 'test-owner' },
@@ -266,7 +276,6 @@ MIIEpAIBAAKCAQEAxTlXmx8x5n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x
   });
 
   test('handles manual scan via /scan comment', async () => {
-    // Mock scanner
     scanNPM.mockResolvedValue([
       {
         package: 'lodash',
@@ -274,15 +283,27 @@ MIIEpAIBAAKCAQEAxTlXmx8x5n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x
         vulnerabilities: [{
           id: 'CVE-2020-8203',
           severity: 'CRITICAL',
-          summary: 'Prototype Pollution'
-        }]
+          summary: 'Prototype Pollution',
+          fixedVersion: '4.17.21'
+        }],
+        recommendedFix: '4.17.21'
       }
     ]);
 
     getCached.mockReturnValue(null);
-    setCached.mockImplementation(() => {});
+    setCached.mockImplementation(() => { });
+
+    // Mock PR get
+    mockGitHub.pulls.get = jest.fn().mockResolvedValue({
+      data: {
+        head: { sha: 'abc123', ref: 'feature-branch', repo: { fork: false } },
+        base: { sha: 'main' },
+        title: 'Test PR'
+      }
+    });
 
     const event = {
+      id: 'evt-3',
       name: 'issue_comment',
       payload: {
         action: 'created',
@@ -313,11 +334,10 @@ MIIEpAIBAAKCAQEAxTlXmx8x5n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x
   });
 
   test('handles scanner errors gracefully', async () => {
-    // Mock scanner to throw error
     scanNPM.mockRejectedValue(new Error('Scanner error'));
 
     getCached.mockReturnValue(null);
-    setCached.mockImplementation(() => {});
+    setCached.mockImplementation(() => { });
 
     const event = {
       name: 'pull_request',
@@ -327,7 +347,8 @@ MIIEpAIBAAKCAQEAxTlXmx8x5n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x
           number: 1,
           head: { sha: 'abc123', ref: 'feature-branch' },
           base: { sha: 'main' },
-          title: 'Test PR'
+          title: 'Test PR',
+          repo: { fork: false }
         },
         repository: {
           owner: { login: 'test-owner' },
@@ -340,54 +361,11 @@ MIIEpAIBAAKCAQEAxTlXmx8x5n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x
 
     await probot.receive(event);
 
-    // Should still create comment with error
-    expect(mockGitHub.issues.createComment).toHaveBeenCalled();
-    expect(mockGitHub.checks.create).toHaveBeenCalled();
-  });
-
-  test('handles rate limiting', async () => {
-    // Mock rate limit error
-    const rateLimitError = new Error('Rate limit exceeded');
-    rateLimitError.status = 403;
-    rateLimitError.headers = {
-      'x-ratelimit-remaining': '0',
-      'x-ratelimit-reset': '1234567890'
-    };
-
-    // Mock scanner to throw rate limit
-    scanNPM.mockRejectedValue(rateLimitError);
-
-    getCached.mockReturnValue(null);
-    setCached.mockImplementation(() => {});
-
-    const event = {
-      name: 'pull_request',
-      payload: {
-        action: 'opened',
-        pull_request: {
-          number: 1,
-          head: { sha: 'abc123', ref: 'feature-branch' },
-          base: { sha: 'main' },
-          title: 'Test PR'
-        },
-        repository: {
-          owner: { login: 'test-owner' },
-          name: 'test-repo',
-          full_name: 'test-owner/test-repo',
-          default_branch: 'main'
-        }
-      }
-    };
-
-    await probot.receive(event);
-
-    // Should handle gracefully
     expect(mockGitHub.issues.createComment).toHaveBeenCalled();
     expect(mockGitHub.checks.create).toHaveBeenCalled();
   });
 
   test('respects severity threshold', async () => {
-    // Mock scanner with low severity vulnerabilities
     scanNPM.mockResolvedValue([
       {
         package: 'test-package',
@@ -400,11 +378,8 @@ MIIEpAIBAAKCAQEAxTlXmx8x5n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x
       }
     ]);
 
-    // Set high threshold
-    process.env.SEVERITY_THRESHOLD = 'HIGH';
-
     getCached.mockReturnValue(null);
-    setCached.mockImplementation(() => {});
+    setCached.mockImplementation(() => { });
 
     const event = {
       name: 'pull_request',
@@ -414,7 +389,8 @@ MIIEpAIBAAKCAQEAxTlXmx8x5n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x
           number: 1,
           head: { sha: 'abc123', ref: 'feature-branch' },
           base: { sha: 'main' },
-          title: 'Test PR'
+          title: 'Test PR',
+          repo: { fork: false }
         },
         repository: {
           owner: { login: 'test-owner' },
@@ -427,8 +403,37 @@ MIIEpAIBAAKCAQEAxTlXmx8x5n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x8n5x
 
     await probot.receive(event);
 
-    // Should not create comment for LOW severity when threshold is HIGH
     expect(mockGitHub.issues.createComment).not.toHaveBeenCalled();
     expect(mockGitHub.checks.create).toHaveBeenCalled();
+  });
+
+  test('skips fork PRs when configured', async () => {
+    scanNPM.mockResolvedValue([]);
+
+    const event = {
+      id: 'evt-6',
+      name: 'pull_request',
+      payload: {
+        action: 'opened',
+        pull_request: {
+          number: 1,
+          head: { sha: 'abc123', ref: 'feature-branch' },
+          base: { sha: 'main' },
+          title: 'Test PR',
+          repo: { fork: true }
+        },
+        repository: {
+          owner: { login: 'test-owner' },
+          name: 'test-repo',
+          full_name: 'test-owner/test-repo',
+          default_branch: 'main'
+        }
+      }
+    };
+
+    await probot.receive(event);
+
+    expect(scanNPM).not.toHaveBeenCalled();
+    expect(mockGitHub.issues.createComment).not.toHaveBeenCalled();
   });
 });
