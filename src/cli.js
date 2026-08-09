@@ -3,13 +3,14 @@
 const fs = require('fs');
 const path = require('path');
 const { program } = require('commander');
+const packageJson = require('../package.json');
 const { scanNPM } = require('./scanners/npm-scanner');
 const { scanPip } = require('./scanners/pip-scanner');
 
 program
   .name('depscan')
   .description('Scan dependency files for vulnerabilities')
-  .version('1.0.5')
+  .version(packageJson.version)
   .argument('[file]', 'Path to dependency file', 'package.json')
   .option('-t, --type <type>', 'Package manager type (npm, pip)', 'auto')
   .option('-o, --output <format>', 'Output format (json, table)', 'table')
@@ -21,41 +22,41 @@ program
 async function main() {
   const options = program.opts();
   const filePath = program.args[0] || 'package.json';
-  
+
   try {
     if (!fs.existsSync(filePath)) {
       console.error(`❌ File not found: ${filePath}`);
       process.exit(1);
     }
-    
+
     const content = fs.readFileSync(filePath, 'utf8');
     const fileType = options.type === 'auto' ? detectFileType(filePath) : options.type;
-    
+
     if (!options.quiet) {
       console.log(`🔍 Scanning ${filePath} (type: ${fileType})...`);
     }
-    
+
     let findings = [];
     if (fileType === 'npm' || fileType === 'yarn') {
-      findings = await scanNPM(content, () => null, () => {});
+      findings = await scanNPM(content, () => null, () => { });
     } else if (fileType === 'pip' || fileType === 'poetry') {
-      findings = await scanPip(content, () => null, () => {});
+      findings = await scanPip(content, () => null, () => { });
     } else {
       console.error(`❌ Unsupported package type: ${fileType}`);
       process.exit(1);
     }
-    
+
     const severityOrder = { 'CRITICAL': 4, 'HIGH': 3, 'MEDIUM': 2, 'LOW': 1 };
     const threshold = { 'critical': 4, 'high': 3, 'medium': 2, 'low': 1 }[options.failOn?.toLowerCase()] || 3;
-    
-    const filtered = findings.filter(f => 
+
+    const filtered = findings.filter(f =>
       f.vulnerabilities.some(v => (severityOrder[v.severity] || 0) >= threshold)
     );
-    
+
     if (!options.quiet) {
       outputResults(filtered, options.output);
     }
-    
+
     if (filtered.length > 0) {
       console.log(`\n❌ Found ${filtered.length} vulnerabilities above ${options.failOn} severity.`);
       process.exit(1);

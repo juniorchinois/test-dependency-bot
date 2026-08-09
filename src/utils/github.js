@@ -9,7 +9,7 @@ function formatComment(findings, prNumber) {
   const low = findings.filter(f => f.vulnerabilities.some(v => v.severity === 'LOW'));
 
   let comment = `## 🔒 Dependency Vulnerability Scan\n\n`;
-  comment += `**Pull Request**: [#${prNumber}](https://github.com/your-repo/pull/${prNumber})\n`;
+  comment += `**Pull Request**: #${prNumber}\n`;
   comment += `**Scan Date**: ${new Date().toLocaleString()}\n`;
   comment += `**Threshold**: ${config.severityThreshold}\n\n`;
 
@@ -26,7 +26,7 @@ function formatComment(findings, prNumber) {
     for (const finding of critical) {
       const vuln = finding.vulnerabilities.find(v => v.severity === 'CRITICAL');
       if (vuln) {
-        comment += `| ${finding.package} | \`${finding.currentVersion}\` | \`${vuln.id}\` | ${vuln.fixedVersion ? `\`${vuln.fixedVersion}\`` : '❌ No fix' } |\n`;
+        comment += `| ${finding.package} | \`${finding.currentVersion}\` | \`${vuln.id}\` | ${vuln.fixedVersion ? `\`${vuln.fixedVersion}\`` : '❌ No fix'} |\n`;
       }
     }
     comment += `\n`;
@@ -41,7 +41,7 @@ function formatComment(findings, prNumber) {
     for (const finding of high) {
       const vuln = finding.vulnerabilities.find(v => v.severity === 'HIGH');
       if (vuln) {
-        comment += `| ${finding.package} | \`${finding.currentVersion}\` | \`${vuln.id}\` | ${vuln.fixedVersion ? `\`${vuln.fixedVersion}\`` : '❌ No fix' } |\n`;
+        comment += `| ${finding.package} | \`${finding.currentVersion}\` | \`${vuln.id}\` | ${vuln.fixedVersion ? `\`${vuln.fixedVersion}\`` : '❌ No fix'} |\n`;
       }
     }
     comment += `\n`;
@@ -56,7 +56,7 @@ function formatComment(findings, prNumber) {
     for (const finding of medium) {
       const vuln = finding.vulnerabilities.find(v => v.severity === 'MEDIUM');
       if (vuln) {
-        comment += `| ${finding.package} | \`${finding.currentVersion}\` | \`${vuln.id}\` | ${vuln.fixedVersion ? `\`${vuln.fixedVersion}\`` : '❌ No fix' } |\n`;
+        comment += `| ${finding.package} | \`${finding.currentVersion}\` | \`${vuln.id}\` | ${vuln.fixedVersion ? `\`${vuln.fixedVersion}\`` : '❌ No fix'} |\n`;
       }
     }
     comment += `\n`;
@@ -71,7 +71,7 @@ function formatComment(findings, prNumber) {
     for (const finding of low) {
       const vuln = finding.vulnerabilities.find(v => v.severity === 'LOW');
       if (vuln) {
-        comment += `| ${finding.package} | \`${finding.currentVersion}\` | \`${vuln.id}\` | ${vuln.fixedVersion ? `\`${vuln.fixedVersion}\`` : '❌ No fix' } |\n`;
+        comment += `| ${finding.package} | \`${finding.currentVersion}\` | \`${vuln.id}\` | ${vuln.fixedVersion ? `\`${vuln.fixedVersion}\`` : '❌ No fix'} |\n`;
       }
     }
     comment += `\n`;
@@ -92,7 +92,7 @@ function formatComment(findings, prNumber) {
     comment += `\n### 🔧 Recommended Actions\n\n`;
     comment += `1. **Update dependencies** to the latest secure versions:\n`;
     comment += `\`\`\`bash\n`;
-    
+
     const uniquePackages = [...new Set(findings.map(f => f.package))];
     for (const pkg of uniquePackages) {
       const finding = findings.find(f => f.package === pkg);
@@ -103,12 +103,12 @@ function formatComment(findings, prNumber) {
       }
     }
     comment += `\`\`\`\n`;
-    
+
     comment += `2. **Run audit** to check for other issues:\n`;
     comment += `\`\`\`bash\n`;
     comment += `npm audit fix\n`;
     comment += `\`\`\`\n`;
-    
+
     comment += `3. **Review advisories** for more information:\n`;
     for (const finding of findings.slice(0, 3)) {
       const vuln = finding.vulnerabilities[0];
@@ -181,13 +181,12 @@ function generateMarkdownTable(findings) {
   if (findings.length === 0) {
     return 'No vulnerabilities found.';
   }
-  
+
   let table = '| Package | Current Version | Severity | Vulnerability | Fixed Version |\n';
   table += '|---------|----------------|----------|---------------|---------------|\n';
-  
+
   for (const finding of findings) {
     for (const vuln of finding.vulnerabilities) {
-      const summary = vuln.summary.length > 50 ? vuln.summary.slice(0, 47) + '...' : vuln.summary;
       table += `| ${finding.package} | ${finding.currentVersion} | ${vuln.severity} | ${vuln.id} | ${vuln.fixedVersion || 'N/A'} |\n`;
     }
   }
@@ -211,14 +210,14 @@ function getSeverityColor(severity) {
     'HIGH': '#ff6b6b',
     'MEDIUM': '#ffd93d',
     'LOW': '#6bcb77',
-    'UNKNOWN': '#grey'
+    'UNKNOWN': '#808080'
   };
-  return colors[severity] || '#grey';
+  return colors[severity] || '#808080';
 }
 
-module.exports = { 
-  formatComment, 
-  formatErrorComment, 
+module.exports = {
+  formatComment,
+  formatErrorComment,
   formatVulnerabilityDetails,
   generateMarkdownTable,
   getSeverityEmoji,

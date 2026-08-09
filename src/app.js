@@ -3,9 +3,8 @@ const { logger } = require('./utils/logger');
 const config = require('./config');
 const npmScanner = require('./scanners/npm-scanner');
 const pipScanner = require('./scanners/pip-scanner');
-const { getCached, setCached, initialize: initCache, shutdown: shutdownCache, getCacheStats } = require('./utils/cache');
+const { getCached, setCached, initialize: initCache, getCacheStats } = require('./utils/cache');
 const { formatComment, formatErrorComment } = require('./utils/github');
-const crypto = require('crypto');
 
 function botApp(app, options = {}) {
   initCache();
@@ -56,7 +55,13 @@ function botApp(app, options = {}) {
 
     try {
       // Skip fork PRs if configured
-      if (config.skipForks && pull_request.head.repo?.fork) {
+      const isForkPr = Boolean(
+        pull_request.head?.repo?.fork ||
+        pull_request.head?.fork ||
+        pull_request.repo?.fork
+      );
+
+      if (config.skipForks && isForkPr) {
         logger.info(`⏭️ Skipping fork PR #${prNumber}`);
         return;
       }
@@ -77,19 +82,13 @@ function botApp(app, options = {}) {
       const manifestFiles = [];
       const fileContents = {};
 
-      // Detect manifest files
+      // Detect supported manifest files
       for (const file of files.data) {
         const filename = file.filename;
         if (filename === 'package.json' && config.ecosystems.npm) {
           manifestFiles.push({ path: filename, type: 'npm' });
         } else if (filename === 'requirements.txt' && config.ecosystems.pip) {
           manifestFiles.push({ path: filename, type: 'pip' });
-        } else if (filename === 'yarn.lock' && config.ecosystems.yarn) {
-          manifestFiles.push({ path: filename, type: 'yarn' });
-        } else if (filename === 'poetry.lock' && config.ecosystems.poetry) {
-          manifestFiles.push({ path: filename, type: 'poetry' });
-        } else if (filename === 'pyproject.toml' && config.ecosystems.poetry) {
-          manifestFiles.push({ path: filename, type: 'poetry' });
         }
       }
 
@@ -192,7 +191,6 @@ function botApp(app, options = {}) {
       logger.error(`❌ Error processing PR #${prNumber}:`, error);
 
       // Determine error type for better messaging
-      let errorMessage = error.message;
       let userFriendlyMessage = 'An error occurred while scanning dependencies.';
 
       if (error.status === 403 && error.headers?.['x-ratelimit-remaining'] === '0') {
@@ -259,18 +257,9 @@ function botApp(app, options = {}) {
             ...context.payload,
             pull_request: {
               number: prNumber,
-              head: {
-                sha: pr.data.head.sha,
-                ref: pr.data.head.ref,
-                repo: pr.data.head.repo
-              },
-              base: {
-                sha: pr.data.base.sha,
-                ref: pr.data.base.ref
-              },
-              title: pr.data.title,
               head: pr.data.head,
-              base: pr.data.base
+              base: pr.data.base,
+              title: pr.data.title
             },
             repository: repository
           }
@@ -436,7 +425,6 @@ function botApp(app, options = {}) {
     const { pull_request, repository } = context.payload;
     const owner = repository.owner.login;
     const repo = repository.name;
-    const prNumber = pull_request.number;
 
     try {
       let summary = summaryMessage || 'Dependency vulnerability scan completed.';

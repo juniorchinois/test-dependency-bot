@@ -12,7 +12,6 @@ let cache = {};
 let cacheDirty = false;
 let initialized = false;
 let saveTimeout = null;
-let saveQueue = [];
 
 function ensureCacheDir() {
   if (!fs.existsSync(CACHE_DIR)) {
@@ -26,12 +25,12 @@ function initialize() {
   ensureCacheDir();
   loadCache();
   initialized = true;
-  
+
   // Handle process exit
   process.on('exit', () => { saveCacheSync(); });
   process.on('SIGINT', () => { saveCacheSync(); process.exit(0); });
   process.on('SIGTERM', () => { saveCacheSync(); process.exit(0); });
-  
+
   logger.info(`📦 Cache initialized with ${Object.keys(cache).length} entries`);
 }
 
@@ -40,18 +39,18 @@ function loadCache() {
     if (fs.existsSync(CACHE_FILE)) {
       const data = fs.readFileSync(CACHE_FILE, 'utf8');
       const parsed = JSON.parse(data);
-      
+
       // Validate cache entries and remove expired ones
       const now = Date.now();
       const ttl = config.cacheTTL || 86400000;
       const validEntries = {};
-      
+
       for (const [key, value] of Object.entries(parsed)) {
         if (value.timestamp && (now - value.timestamp) < ttl) {
           validEntries[key] = value;
         }
       }
-      
+
       cache = validEntries;
       logger.debug(`📦 Cache loaded with ${Object.keys(cache).length} valid entries (${Object.keys(parsed).length - Object.keys(cache).length} expired)`);
     } else {
@@ -67,7 +66,7 @@ function saveCacheSync() {
   if (!cacheDirty || !initialized) return;
   try {
     ensureCacheDir();
-    
+
     // Limit cache size
     const keys = Object.keys(cache);
     if (keys.length > MAX_CACHE_SIZE) {
@@ -78,7 +77,7 @@ function saveCacheSync() {
       }
       cache = newCache;
     }
-    
+
     fs.writeFileSync(CACHE_FILE, JSON.stringify(cache, null, 2));
     cacheDirty = false;
     logger.debug(`💾 Cache saved with ${Object.keys(cache).length} entries`);
@@ -89,7 +88,7 @@ function saveCacheSync() {
 
 function saveCacheAsync() {
   if (!cacheDirty || !initialized) return;
-  
+
   // Debounce saves
   clearTimeout(saveTimeout);
   saveTimeout = setTimeout(() => {
@@ -99,10 +98,10 @@ function saveCacheAsync() {
 
 function getCached(key) {
   if (!initialized) initialize();
-  
+
   const entry = cache[key];
   if (!entry) return null;
-  
+
   // Check if expired
   const now = Date.now();
   const ttl = config.cacheTTL || 86400000;
@@ -111,18 +110,18 @@ function getCached(key) {
     cacheDirty = true;
     return null;
   }
-  
+
   return entry;
 }
 
 function setCached(key, value) {
   if (!initialized) initialize();
-  
+
   // Ensure value has timestamp
   if (!value.timestamp) {
     value.timestamp = Date.now();
   }
-  
+
   cache[key] = value;
   cacheDirty = true;
   saveCacheAsync();
@@ -132,18 +131,18 @@ function getCacheStats() {
   if (!initialized) initialize();
   const now = Date.now();
   const ttl = config.cacheTTL || 86400000;
-  
+
   let validCount = 0;
   let expiredCount = 0;
-  
-  for (const [key, value] of Object.entries(cache)) {
+
+  for (const [, value] of Object.entries(cache)) {
     if (value.timestamp && (now - value.timestamp) < ttl) {
       validCount++;
     } else {
       expiredCount++;
     }
   }
-  
+
   return {
     totalEntries: Object.keys(cache).length,
     validEntries: validCount,
@@ -178,11 +177,11 @@ function getCacheEntry(key) {
   return cache[key] || null;
 }
 
-module.exports = { 
-  getCached, 
-  setCached, 
-  getCacheStats, 
-  initialize, 
+module.exports = {
+  getCached,
+  setCached,
+  getCacheStats,
+  initialize,
   shutdown,
   cleanCache,
   getCacheKeys,

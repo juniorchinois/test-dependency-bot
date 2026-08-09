@@ -1,7 +1,6 @@
 // src/index.js - Main entry point
 const { Probot } = require('probot');
 const botApp = require('./app');
-const config = require('./config');
 const { logger } = require('./utils/logger');
 
 // Export as library

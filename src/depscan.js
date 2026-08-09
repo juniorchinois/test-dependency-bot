@@ -2,7 +2,7 @@
 const { program } = require('commander');
 const fs = require('fs');
 const path = require('path');
-const { scanNPM, scanPip, logger, config } = require('./index');
+const { scanNPM, scanPip } = require('./index');
 
 program
   .version(require('../package.json').version)
@@ -16,15 +16,15 @@ program
   .action(async (file, options) => {
     try {
       const content = fs.readFileSync(file, 'utf8');
-      const type = options.type === 'auto' 
+      const type = options.type === 'auto'
         ? path.basename(file) === 'requirements.txt' ? 'pip' : 'npm'
         : options.type;
-      
+
       let findings;
       if (type === 'npm') {
-        findings = await scanNPM(content, () => null, () => {});
+        findings = await scanNPM(content, () => null, () => { });
       } else if (type === 'pip') {
-        findings = await scanPip(content, () => null, () => {});
+        findings = await scanPip(content, () => null, () => { });
       } else {
         throw new Error(`Unsupported type: ${type}`);
       }
@@ -66,7 +66,7 @@ program
   .option('-c, --clear', 'Clear cache')
   .option('-s, --stats', 'Show cache stats')
   .action(async (options) => {
-    const { getCacheStats, cleanCache } = require('./utils/cache');
+    const { getCacheStats } = require('./utils/cache');
     if (options.clear) {
       require('../scripts/clear-cache')();
       console.log('✅ Cache cleared');

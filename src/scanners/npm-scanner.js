@@ -30,9 +30,13 @@ class NPMScanner {
         ...(packageJson.peerDependencies || {})
       };
 
+      const maxDependencies = Number.isFinite(config.maxDependencies) && config.maxDependencies > 0
+        ? config.maxDependencies
+        : 100;
+
       const depsToScan = Object.entries(allDeps)
-        .filter(([name, version]) => !config.ignoredPackages.includes(name))
-        .slice(0, config.maxDependencies || 100);
+        .filter(([name]) => !config.ignoredPackages.includes(name))
+        .slice(0, maxDependencies);
 
       if (depsToScan.length === 0) {
         logger.info('📦 No dependencies found in package.json');
@@ -374,7 +378,7 @@ class NPMScanner {
     if (!version) return null;
     try {
       // Remove npm-specific prefixes
-      let clean = version.replace(/^[~^]/, '');
+      const clean = version.replace(/^[~^]/, '');
       // Handle ranges
       if (clean.includes('||') || clean.includes(' - ')) {
         // For complex ranges, try to extract the first valid version

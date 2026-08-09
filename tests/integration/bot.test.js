@@ -1,6 +1,5 @@
 // tests/integration/bot.test.js
-const { Probot, createProbot } = require('probot');
-const nock = require('nock');
+const { createProbot } = require('probot');
 
 // Mock dependencies
 jest.mock('../../src/utils/cache');

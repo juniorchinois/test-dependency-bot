@@ -1,7 +1,6 @@
 // tests/unit/npm-scanner.test.js
 const { scanNPM } = require('../../src/scanners/npm-scanner');
 const nock = require('nock');
-const config = require('../../src/config');
 
 describe('NPM Scanner', () => {
   let getCache, setCache;
